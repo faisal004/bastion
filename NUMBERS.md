@@ -5,6 +5,8 @@ All numbers come from `scripts/bench.mjs`, which drives the in-game Stress Lab i
 
 **Machine:** Apple M5, Chrome 156, ANGLE/Metal, 1403×836 CSS px at 2× DPR, 60 Hz.
 **Pass criteria** (from the brief): ≥ 45 fps for 95% of frames **and** < 5% of frames over 33 ms.
+From section 5 on, there is also a third criterion: **sim speed ≥ 95%**, meaning game time keeps up
+with real time. A simulation that falls behind can hide behind smooth frames (see section 5).
 **Ramp:** all three loads scale together from 10% to 800% of the target (5,000 enemies / 100 towers /
 1,000 projectiles). Each step settles for 1 s, then records 3 s of real frame times.
 
@@ -69,6 +71,7 @@ in the same session.
 | 2 | Spatial hash grid for range queries | 15,000 → **20,000** enemies | 30,000 → **> 40,000** (passes the whole ramp) | sim at 30k: 395 → **23** ms/frame |
 | 3 | Allocation-free sim: cached path segment, pools, in-place compaction, no hidden allocations | 20,000 → **30,000** enemies | > 40,000 (frame work at 40k: 8.3 → 7.0 ms) | sim per step at 40k (Node): 6.60 → **3.07** ms; GCs 92 → 11 |
 | 4 | Counting-sort GPU fill, off-screen culling, cached ground | 30,000 → 30,000 (**unchanged**; limit is now sim + frame budget) | > 40,000 | draw at 20k: 9.06 → **5.93** ms; zoomed 2.5×: entities 3.4 → 1.9 ms, towers 1.15 → 0.32 ms |
+| 5 | Simulation in a Web Worker (experiment, **not default**) | 30,000 → 30,000 (worse: sim speed 57% at 30k) | breaks between 40k and 60k either way | main-thread work at 20k: ~9 → ~4 ms; worker step ~60% slower than main-thread step |
 
 The table's last column changes with each row, because each optimization targets a different bottleneck.
 
@@ -286,3 +289,63 @@ fell 21–45%:
 
 To go further, the simulation has to stop sharing the main thread with drawing (a Web Worker),
 or one step has to get cheaper again.
+
+
+### 5 · Simulation in a Web Worker — an experiment that did not pay off (kept as an option)
+
+**Idea.** Sim and draw share one thread, so their costs add up. Moving the sim into a worker
+should let them overlap.
+
+**Build** ([src/sim-worker.js](src/sim-worker.js), [src/proxy.js](src/proxy.js), [src/snapshot.js](src/snapshot.js)):
+- The worker owns the real `Game`. Each frame the main thread asks for N fixed steps, with N
+  from the same accumulator, so refresh-rate independence is kept.
+- The worker replies with a snapshot: one `Float32Array` per tick, *transferred* (zero-copy)
+  and ping-ponged back as the next tick's buffer. Per entity: 7 floats per enemy, 5 per
+  projectile, 11 per effect.
+- At most one tick is in flight. Owed steps are capped, so a slow worker drops time instead of queueing.
+- On the main thread, a `GameProxy` exposes the same read API the renderer and UI use, and
+  turns actions into commands.
+  - Towers are addressed by tile, so a command in flight cannot hit the wrong tower.
+  - Placement is optimistic: gold and the tile update at once, and the worker confirms.
+- The WebGL renderer reads enemy floats directly, with no objects per enemy on the main thread.
+
+**Verified end to end in worker mode:** build, wave, kills, upgrade (−60 g, level 2), retarget,
+sell (70% refund, tile freed), and the wave-2 auto-start.
+
+**Two measurement traps found on the way:**
+1. **DevTools CPU throttling does not apply to workers.** Chrome's error: *"Operation is only
+   supported for pages, not workers"*.
+   - The first 4× run therefore compared a throttled main thread with a full-speed worker, and
+     falsely "passed everything up to 40k".
+   - Fix: `?workercpu=N` makes the worker emulate an N× slower core by busy-waiting (N−1) × its
+     measured work.
+2. **Smooth frames can hide a slow-motion game.** With the sim off-thread, frame rate stays at 60
+   while game time falls behind. The Stress Lab now measures **sim speed** (game time ÷ real
+   time) and fails any step under 95%.
+
+**Results**
+
+| Load | main-thread sim | worker sim |
+|---|---|---|
+| 20k / 400 / 4k, 4× CPU | pass · 56.8 fps @95% · sim 3.76 + draw 5.19 ms on the main thread | pass · 56.8 fps @95% · draw 4.14 ms on the main thread (sim off-thread) |
+| 30k / 600 / 6k, 4× CPU | FAIL · 29.8 fps @95% · sim speed 100% | FAIL · 29.9 fps @95% · **sim speed 57%** |
+| 30k, native | pass · 59.5 fps @95% · **sim step 2.10 ms** | pass · 59.2 fps @95% · **sim step 3.39 ms** |
+| 60k / 600 / 12k, native | FAIL · 20.2 fps @95% · avg 43.1 · draw 10.7 ms | FAIL · 20.0 fps @95% · avg 45.4 · draw 15.3 ms |
+| 80k / 600 / 16k, native | FAIL · 15.0 fps @95% · avg 28.9 | FAIL · 15.1 fps @95% · avg 34.5 · sim speed 72% |
+
+**Why it did not help here:**
+- **The same simulation step is ~60% slower in the worker** (3.39 vs 2.10 ms at 30k, native).
+  The likely cause is macOS scheduling: background threads get a lower QoS class and can run on
+  the M5's efficiency cores, while the page's main thread stays on a performance core.
+  JavaScript cannot set a worker's thread priority.
+- **The handoff is not free.** The worker packs a snapshot every tick. The main thread receives
+  and unpacks towers, effects and the grid every tick. Main-thread draw time at 60k went *up*
+  (10.7 → 15.3 ms).
+- Under 4× throttling, those slower worker steps plus packing come close to a frame each. Owed
+  steps then pile up, and the sim falls to 57% of real time.
+
+**What it does buy:** a lighter main thread at loads that already pass (at 20k under 4× CPU:
+~4 ms of main-thread work instead of ~9 ms), which means more input headroom. That is not enough to
+justify the extra latency (one frame) and complexity as the default. So `sim: main` stays the
+default, and `sim: worker` remains a switch in the Stress Lab (changing it reloads the page with
+the same load).

@@ -79,6 +79,10 @@ src/
   shapes.js               enemy shape painting shared by every renderer
   opts.js                 runtime optimization switches (?baseline, ?opt=key:value)
   grid.js                 spatial hash grid for range queries
+  stress.js               stress-load setup shared by the lab and the worker
+  sim-worker.js           optional: simulation in a Web Worker (sim: worker)
+  snapshot.js             worker -> main snapshot format (transferred Float32Array)
+  proxy.js                main-thread GameProxy used in worker mode
   ui.js                   DOM HUD / shop / selection panel; writes to the DOM only when values change
   main.js                 bootstrap, the single frame loop, input, camera, perf meter
   bot.js                  headless autoplayer, used for balance tuning and long-run tests
@@ -169,9 +173,12 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
      string keys.
    - A counting-sort fill halved it. Culling makes zoomed-in draw cost follow what is on screen.
      The static ground is cached.
-5. **Sim + draw on one thread (open).** At 25k under 4× throttling, one sim step (~8 ms) plus
-   draw (~9.6 ms) exceeds 16.7 ms. The next lever is running the simulation in a Web Worker,
-   in parallel with drawing.
+5. **Sim + draw on one thread (tried a worker; not adopted).**
+   - At 25k under 4× throttling, one sim step (~8 ms) plus draw (~9.6 ms) exceeds 16.7 ms.
+   - Moving the sim into a Web Worker (transferred `Float32Array` snapshots, a main-thread
+     `GameProxy`) did not raise the breaking point. The same step runs ~60% slower in the worker
+     (likely efficiency-core scheduling), and packing/unpacking snapshots costs main-thread time.
+   - It stays available as `sim: worker`. See NUMBERS.md section 5.
 
 ### Optimizations
 | # | What | Switch |
@@ -183,6 +190,7 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
 | 4 | Counting-sort WebGL instance fill (2 passes, zero garbage) | `glfill`: buckets / **counting** |
 | 4 | Viewport culling for enemies, projectiles and towers | `cull`: off / **on** |
 | 4 | Static ground cached in an offscreen layer | `bg`: redraw / **cached** |
+| 5 | Simulation in a Web Worker: zero-copy snapshots, `GameProxy` (measured slower; not default) | `sim`: **main** / worker |
 
 Every optimization is a runtime switch, so before and after run on the same build:
 - `?baseline` starts with every switch at its original setting.
@@ -201,6 +209,8 @@ Every optimization is a runtime switch, so before and after run on the same buil
   - **fps @95%**: 1000 / p95 frame time. This is the frame rate that 95% of frames meet.
     The brief requires ≥ 45.
   - **>33 ms**: the share of frames slower than 33 ms. The brief requires < 5%.
+  - **sim speed**: game time advanced ÷ real time. This catches a simulation that falls behind
+    while frames stay smooth. It must be ≥ 95%.
 - A live frame-time graph turns yellow below 45 fps and red below 30 fps.
 - **Find breaking point** ramps the load from 10% to 800% of the target and plots fps per step.
   It then marks the first step that fails either criterion.
@@ -221,6 +231,8 @@ node scripts/profile-sim.mjs 20000 400 4000 opt=grid:on   # per-phase sim profil
 - It drives the Stress Lab over the DevTools protocol, prints a table, and can save JSON
   (`--out`) and a screenshot (`--shot`).
 - Use `--headed`. Headless Chrome reported 60 fps at loads where the real window could not keep up.
+- DevTools CPU throttling does not reach Web Workers. With `--cpu N`, the script also passes
+  `workercpu=N`, so the worker emulates the same slowdown.
 
 Roadmap:
 

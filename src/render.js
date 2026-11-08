@@ -36,7 +36,8 @@ export class Renderer {
     this.prof = { frames: 0, ground: 0, towers: 0, entities: 0, effects: 0 };
   }
 
-  get glActive() { return opts.render === 'webgl' && this.glr.ok; }
+  // worker mode has no enemy objects on this thread, so it always draws entities with WebGL
+  get glActive() { return (opts.render === 'webgl' || this.forceGL) && this.glr.ok; }
 
   resize(w, h) {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);

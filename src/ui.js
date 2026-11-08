@@ -136,7 +136,7 @@ export class UI {
   updateSelection() {
     const g = this.game, t = this.view.selected;
     const box = $('sel');
-    if (!t) { this.set(box, 'class', 'hidden'); this.selKey = ''; return; }
+    if (!t || !t.def) { this.set(box, 'class', 'hidden'); this.selKey = ''; return; } // (a tower placed in worker mode is pending for a frame)
     this.set(box, 'class', '');
     const st = g.stats(t);
     const upCost = g.upgradeCost(t);

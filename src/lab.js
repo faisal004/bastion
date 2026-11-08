@@ -3,15 +3,17 @@
 // Open with `L` or ?lab. ?stress=5000,100,1000 applies a load on load.
 import * as C from './config.js';
 import { OPT_DEFS, opts } from './opts.js';
+import { stressSetup, stressTopUp } from './stress.js';
 
 export const TARGET = { enemies: 5000, towers: 100, projectiles: 1000 };
-const STRESS_TYPES = ['grunt', 'grunt', 'runner', 'tank', 'swarm', 'swarm', 'flyer'];
-const TOWER_MIX = ['blaster', 'cannon', 'frost', 'sniper', 'blaster'];
 const RAMP_STEPS = [0.1, 0.2, 0.4, 0.6, 0.8, 1, 1.5, 2, 3, 4, 6, 8];
 const MAX_TOWERS = 600;
 const FPS45_MS = 1000 / 45 + 0.5; // small tolerance for rAF timestamp jitter
 const GRAPH_N = 300;
 const STORE_KEY = 'bastion.lab.results';
+
+// Pass = the brief's frame criteria AND the simulation keeping (near) real time.
+export const passes = (p) => p.fps95 >= 45 && p.pctOver33 <= 5 && !(p.simSpeed < 0.95);
 
 export function frameStats(samples) {
   const n = samples.length;
@@ -119,7 +121,21 @@ export class Lab {
     });
     for (const sel of el.querySelectorAll('[data-opt]')) {
       sel.value = opts[sel.dataset.opt];
-      sel.onchange = () => { opts[sel.dataset.opt] = sel.value; this.$('lab-ver').textContent = this.app.version(); };
+      sel.onchange = () => {
+        const d = OPT_DEFS.find((x) => x.key === sel.dataset.opt);
+        opts[d.key] = sel.value;
+        if (d.reload) { // e.g. moving the simulation to another thread: reload with the same switches and load
+          const q = new URLSearchParams(location.search);
+          q.delete('baseline');
+          q.set('opt', OPT_DEFS.map((x) => `${x.key}:${opts[x.key]}`).join(','));
+          q.set('lab', '');
+          if (this.active) q.set('stress', `${this.cfg.enemies},${this.cfg.towers},${this.cfg.projectiles}`);
+          location.search = q.toString();
+          return;
+        }
+        if (this.app.game.isProxy) this.app.game.setOpts(opts);
+        this.$('lab-ver').textContent = this.app.version();
+      };
     }
     // keep game hotkeys from firing while using the panel's inputs
     el.addEventListener('keydown', (e) => e.stopPropagation());
@@ -168,17 +184,14 @@ export class Lab {
   apply(cfg) {
     const { game, ui, ctl, view } = this.app;
     this.cfg = { ...this.cfg, ...cfg };
-    game.reset();
-    game.stress = true;
-    game.state = 'playing';
-    game.gold = 1e9;
     ui.titleDismissed = true;
     ctl.paused = false;
     ctl.speed = 1;
     view.selected = null; view.placing = null;
-    this.placeTowers(this.cfg.towers);
     this.active = true;
-    this.topUp();
+    // worker mode: the worker owns the game and holds the load itself
+    if (game.isProxy) game.stressLoad({ ...this.cfg });
+    else stressSetup(game, this.cfg);
   }
 
   stop() {
@@ -188,46 +201,10 @@ export class Lab {
     this.status('Stopped.');
   }
 
-  placeTowers(n) {
-    const game = this.app.game;
-    if (!this.cand) {
-      // buildable tiles ordered by how much road they cover
-      const cand = [];
-      for (let r = 0; r < C.ROWS; r++) for (let c = 0; c < C.COLS; c++) {
-        if (game.grid[r * C.COLS + c] !== 0) continue;
-        let k = 0;
-        for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) {
-          const rr = r + dr, cc = c + dc;
-          if (dr * dr + dc * dc <= 9 && rr >= 0 && rr < C.ROWS && cc >= 0 && cc < C.COLS && game.grid[rr * C.COLS + cc] === 1) k++;
-        }
-        cand.push({ c, r, k });
-      }
-      cand.sort((a, b) => b.k - a.k);
-      this.cand = cand;
-    }
-    for (let i = 0, placed = 0; placed < n && i < this.cand.length; i++) {
-      const t = game.placeTower(TOWER_MIX[placed % TOWER_MIX.length], this.cand[i].c, this.cand[i].r, true);
-      if (t) { t.level = 2; placed++; }
-    }
-    game.effects.length = 0;
-  }
-
   // Called once per frame before the simulation runs: hold counts at the target.
   topUp() {
-    if (!this.active) return;
-    const game = this.app.game;
-    const hpMul = C.hpScale(30);
-    for (let need = this.cfg.enemies - game.enemyCount; need > 0; need--) {
-      game.spawnEnemy(STRESS_TYPES[(Math.random() * STRESS_TYPES.length) | 0], hpMul, 1, 3, Math.random() * game.pathLen * 0.98);
-    }
-    if (game.enemyCount === 0) return;
-    const towers = game.towers;
-    for (let need = this.cfg.projectiles - game.projectileCount; need > 0; need--) {
-      const e = game.randomEnemy();
-      const t = towers.length ? towers[(Math.random() * towers.length) | 0] : null;
-      const x = t ? t.x : Math.random() * C.WORLD_W, y = t ? t.y : Math.random() * C.WORLD_H;
-      game.spawnProjectile('bullet', x, y, e, 4 * C.TILE, 2, 0, null);
-    }
+    if (!this.active || this.app.game.isProxy) return;
+    stressTopUp(this.app.game, this.cfg);
   }
 
   // ---------- measurement ----------
@@ -264,7 +241,7 @@ export class Lab {
   status(t) { this.$('lab-status').textContent = t; }
 
   newSample(label, cfg, settle, dur) {
-    return { label, cfg: { ...cfg }, t: 0, settle, dur, dt: [], sim: [], draw: [], ec: [], pc: [] };
+    return { label, cfg: { ...cfg }, t: 0, settle, dur, dt: [], sim: [], draw: [], ec: [], pc: [], gt0: null, gt1: 0 };
   }
 
   startBench() {
@@ -298,13 +275,15 @@ export class Lab {
     if (s.t < s.settle) return;
     s.dt.push(dtMs); s.sim.push(simMs); s.draw.push(drawMs);
     s.ec.push(this.app.game.enemyCount); s.pc.push(this.app.game.projectileCount);
+    // game time vs real time: catches a simulation that cannot keep up even while frames stay smooth
+    if (s.gt0 === null) s.gt0 = this.app.game.time; else s.gt1 = this.app.game.time;
     if (s.t < s.settle + s.dur) return;
 
     const r = this.finishSample(s);
     if (job.type === 'bench') {
       this.job = null;
       this.pushResult(r);
-      this.status(`Done: ${fmt(r.avgFps, 0)} avg fps, ${fmt(r.fps95, 0)} fps for 95% of frames, ${fmt(r.pctOver33)}% frames over 33 ms.`);
+      this.status(`Done: ${fmt(r.avgFps, 0)} avg fps, ${fmt(r.fps95, 0)} fps for 95% of frames, ${fmt(r.pctOver33)}% frames over 33 ms, sim at ${fmt(r.simSpeed * 100, 0)}% of real time.`);
       return;
     }
     this.rampPoints.push(r);
@@ -314,12 +293,12 @@ export class Lab {
     if (job.i < job.steps.length && !tooSlow) { this.nextRampStep(); return; }
 
     this.job = null;
-    const brk = this.rampPoints.find((p) => p.fps95 < 45 || p.pctOver33 > 5);
-    const best = [...this.rampPoints].reverse().find((p) => p.fps95 >= 45 && p.pctOver33 <= 5);
+    const brk = this.rampPoints.find((p) => !passes(p));
+    const best = [...this.rampPoints].reverse().find(passes);
     const summary = {
       ...this.rampMeta, label: 'ramp', time: new Date().toISOString(),
       lastPassing: best ? best.cfg : null, breaksAt: brk ? brk.cfg : null,
-      points: this.rampPoints.map((p) => ({ ...p.cfg, avgFps: +p.avgFps.toFixed(1), fps95: +p.fps95.toFixed(1), pctOver33: +p.pctOver33.toFixed(1), simMs: +p.simMs.toFixed(2), drawMs: +p.drawMs.toFixed(2) })),
+      points: this.rampPoints.map((p) => ({ ...p.cfg, avgFps: +p.avgFps.toFixed(1), fps95: +p.fps95.toFixed(1), pctOver33: +p.pctOver33.toFixed(1), simSpeed: +p.simSpeed.toFixed(3), simMs: +p.simMs.toFixed(2), drawMs: +p.drawMs.toFixed(2) })),
     };
     this.results.push(summary);
     this.save();
@@ -338,6 +317,7 @@ export class Lab {
       ...st, cfg: s.cfg, label: s.label,
       simMs: mean(s.sim), drawMs: mean(s.draw),
       liveEnemies: Math.round(mean(s.ec)), liveProjectiles: Math.round(mean(s.pc)),
+      simSpeed: (s.gt1 - s.gt0) / (s.dt.slice(1).reduce((a, b) => a + b, 0) / 1000),
     };
   }
 
@@ -346,7 +326,7 @@ export class Lab {
       label: 'bench', version: this.app.version(), time: new Date().toISOString(),
       ...r.cfg, liveEnemies: r.liveEnemies, liveProjectiles: r.liveProjectiles,
       avgFps: +r.avgFps.toFixed(1), fps95: +r.fps95.toFixed(1), pctAt45: +r.pctAt45.toFixed(1),
-      pctOver33: +r.pctOver33.toFixed(1), p95: +r.p95.toFixed(2), simMs: +r.simMs.toFixed(2), drawMs: +r.drawMs.toFixed(2),
+      pctOver33: +r.pctOver33.toFixed(1), p95: +r.p95.toFixed(2), simSpeed: +r.simSpeed.toFixed(3), simMs: +r.simMs.toFixed(2), drawMs: +r.drawMs.toFixed(2),
     });
     this.save();
     this.renderResults();
@@ -419,7 +399,7 @@ export class Lab {
     ctx.fillText(Math.round(maxFps / 1.05 / 10) * 10 + '', 6, T + 8);
     ctx.fillText('0', 14, T + ph);
 
-    const brkI = pts.findIndex((p) => p.fps95 < 45 || p.pctOver33 > 5);
+    const brkI = pts.findIndex((p) => !passes(p));
     if (brkI >= 0) {
       ctx.fillStyle = 'rgba(252,129,129,0.12)';
       const x0 = brkI > 0 ? (X(brkI - 1) + X(brkI)) / 2 : L;

@@ -5,6 +5,7 @@ import { Renderer } from './render.js';
 import { UI } from './ui.js';
 import { Lab } from './lab.js';
 import { initOpts, optsLabel, opts, OPT_DEFS } from './opts.js';
+import { GameProxy } from './proxy.js';
 
 initOpts();
 
@@ -12,8 +13,14 @@ const canvas = document.getElementById('game');
 const stage = document.getElementById('stage');
 const perfEl = document.getElementById('perf');
 
-const game = new Game();
 const renderer = new Renderer(canvas);
+// Worker mode needs WebGL (no enemy objects exist on this thread to draw with Canvas 2D).
+const useWorker = opts.sim === 'worker' && typeof Worker !== 'undefined' && renderer.glr.ok;
+if (!useWorker) opts.sim = 'main';
+const game = useWorker
+  ? new GameProxy(new Worker(new URL('./sim-worker.js', import.meta.url), { type: 'module' }), opts)
+  : new Game();
+renderer.forceGL = useWorker;
 const cam = { x: 0, y: 0, zoom: 1, minZoom: 0.5, maxZoom: 3 };
 const view = { placing: null, selected: null, hoverCol: -1, hoverRow: -1, mx: 0, my: 0, inside: false };
 const ctl = { paused: false, speed: 1, restartArmed: false };
@@ -47,17 +54,17 @@ const actions = {
     view.placing = view.placing === type ? null : type;
   },
   upgrade() {
-    if (!view.selected) return;
+    if (!view.selected || !view.selected.def) return;
     if (!game.upgradeTower(view.selected)) {
       if (game.upgradeCost(view.selected) != null) ui.toast('Not enough gold', 'warn');
     }
   },
   sell() {
-    if (!view.selected) return;
+    if (!view.selected || !view.selected.def) return;
     game.sellTower(view.selected);
     view.selected = null;
   },
-  cycleMode() { if (view.selected) game.cycleMode(view.selected); },
+  cycleMode() { if (view.selected && view.selected.def) game.cycleMode(view.selected); },
 };
 
 const ui = new UI(game, view, ctl, actions);
@@ -201,6 +208,7 @@ window.addEventListener('keydown', (e) => {
     case 'l': lab.toggle(); break;
     case 'g': { // demo toggle: original renderer <-> best renderer
       const d = OPT_DEFS.find((x) => x.key === 'render');
+      if (game.isProxy) { ui.toast('Renderer switching needs the main-thread sim (Stress Lab → Simulation thread)', 'warn'); break; }
       opts.render = opts.render === d.best ? d.choices[0] : d.best;
       lab.syncOpts();
       ui.toast(`Renderer: ${d.names[opts.render]}`, 'warn');
@@ -268,15 +276,28 @@ function frame(now) {
   if (running) {
     lab.topUp();
     acc += dt * ctl.speed;
-    let steps = 0;
-    while (acc >= C.STEP && steps < C.MAX_STEPS_PER_FRAME) {
-      game.update(C.STEP);
-      acc -= C.STEP;
-      steps++;
+    if (game.isProxy) {
+      // the worker runs the fixed steps in parallel; we only tell it how many are owed
+      const steps = Math.floor(acc / C.STEP);
+      acc -= steps * C.STEP;
+      game.requestSteps(steps);
+    } else {
+      let steps = 0;
+      while (acc >= C.STEP && steps < C.MAX_STEPS_PER_FRAME) {
+        game.update(C.STEP);
+        acc -= C.STEP;
+        steps++;
+      }
+      if (steps === C.MAX_STEPS_PER_FRAME) acc = 0; // can't keep up: drop time instead of spiraling
     }
-    if (steps === C.MAX_STEPS_PER_FRAME) acc = 0; // can't keep up: drop time instead of spiraling
   }
-  if (view.selected && !game.towers.includes(view.selected)) view.selected = null;
+  // Selection is a tile: re-resolve it every frame (towers are new objects each snapshot in
+  // worker mode; a freshly placed tower is 'pending' until the worker confirms it).
+  if (view.selected) {
+    const s = view.selected, t = game.towerAt(s.c, s.r);
+    if (t) view.selected = t;
+    else if (!(s.pending && performance.now() - s.pending < 1000)) view.selected = null;
+  }
   const t1 = performance.now();
   renderer.draw(game, cam, running ? acc / C.STEP : 1, view, ctl.paused ? 0 : dt);
   const t2 = performance.now();
@@ -284,7 +305,7 @@ function frame(now) {
   drawMs = drawMs * 0.9 + (t2 - t1) * 0.1;
 
   ui.update();
-  lab.frame(rawDtMs, t1 - t0, t2 - t1);
+  lab.frame(rawDtMs, game.isProxy ? game.simMs : t1 - t0, t2 - t1);
   perfTimer -= dt;
   if (perfTimer <= 0) { perfTimer = 0.25; perfReport(); }
   requestAnimationFrame(frame);

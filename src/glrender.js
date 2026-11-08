@@ -7,6 +7,7 @@
 import * as C from './config.js';
 import { DIRS, dirIndex, paintEnemy, spriteHalf } from './shapes.js';
 import { opts } from './opts.js';
+import { ES, PS, LAYERS } from './snapshot.js';
 
 const TILE = C.TILE;
 const TAU = Math.PI * 2;
@@ -15,6 +16,8 @@ const LAYER_ORDER = ['swarm', 'runner', 'grunt', 'tank', 'boss', 'flyer'];
 const ATLAS = 2048;
 const NL = LAYER_ORDER.length;
 LAYER_ORDER.forEach((t, i) => { C.ENEMIES[t].layer = i; }); // numeric layer, so the hot loop never compares strings
+const RADIUS_BY_LAYER = LAYER_ORDER.map((t) => C.ENEMIES[t].radius * TILE);
+if (LAYERS.join() !== LAYER_ORDER.join()) throw new Error('snapshot layer order must match the renderer');
 const CULL_PAD = 64; // world units: largest sprite half-extent + health bar offset
 
 function write(f, u, o, x, y, w, h, e, color) {
@@ -202,9 +205,11 @@ export class GLRenderer {
   // ---------- per frame ----------
   draw(game, cam, scale, alpha) {
     this.ensureAtlas(scale);
-    const need = game.enemies.length * 4 + game.projectiles.length + 16;
+    const ne = game.isProxy ? game.ne : game.enemies.length, np = game.isProxy ? game.np : game.projectiles.length;
+    const need = ne * 4 + np + 16;
     if (need > this.capacity) this.grow(Math.ceil(need * 1.5));
-    const n = opts.glfill === 'counting' ? this.fillCounting(game, cam, scale, alpha) : this.fillBuckets(game, alpha);
+    const n = game.isProxy ? this.fillSnapshot(game, cam, scale, alpha)
+      : opts.glfill === 'counting' ? this.fillCounting(game, cam, scale, alpha) : this.fillBuckets(game, alpha);
     this.instances = n;
     return this.submit(n, cam, scale);
   }
@@ -265,6 +270,65 @@ export class GLRenderer {
       if (cull && (x < vx0 || x > vx1 || y < vy0 || y > vy1)) continue;
       const s = p.kind === 'shell' ? shell : bullet;
       write(f, u, projAt++, x - s.h, y - s.h, s.h * 2, s.h * 2, s, WHITE);
+    }
+    return projAt;
+  }
+
+  // Worker mode: same counting-sort fill, reading the worker's snapshot floats directly
+  // (x, y, px, py, hpFrac, flags, layer per enemy), so no objects exist per enemy on this thread.
+  fillSnapshot(game, cam, scale, alpha) {
+    const f = game.f, n = game.ne, np = game.np;
+    if (!f) return 0;
+    if (this.vis.length < n) {
+      const cap = Math.ceil(n * 1.5);
+      this.ix = new Float32Array(cap); this.iy = new Float32Array(cap); this.vis = new Uint8Array(cap);
+    }
+    const ix = this.ix, iy = this.iy, vis = this.vis, counts = this.counts, offs = this.offs;
+    const out = this.f32, u = this.u32;
+    counts.fill(0);
+    const cull = opts.cull === 'on';
+    const vx0 = cam.x - CULL_PAD, vy0 = cam.y - CULL_PAD;
+    const vx1 = cam.x + this.canvas.width / scale + CULL_PAD, vy1 = cam.y + this.canvas.height / scale + CULL_PAD;
+    let rings = 0, bars = 0;
+    for (let i = 0, o = 0; i < n; i++, o += ES) {
+      const x = f[o + 2] + (f[o] - f[o + 2]) * alpha, y = f[o + 3] + (f[o + 1] - f[o + 3]) * alpha;
+      if (cull && (x < vx0 || x > vx1 || y < vy0 || y > vy1)) { vis[i] = 0; continue; }
+      ix[i] = x; iy[i] = y;
+      const flags = f[o + 5];
+      const slot = f[o + 6] + (flags & 4 ? NL : 0);
+      vis[i] = slot + 1;
+      counts[slot]++;
+      if (flags & 8) rings++;
+      if (flags & 16) bars++;
+    }
+    let acc = 0;
+    for (let k = 0; k < counts.length; k++) { offs[k] = acc; acc += counts[k]; }
+    let ringAt = acc, barAt = acc + rings, projAt = barAt + bars * 2;
+    const white = this.entries.get('white'), rings_ = this.ringByLayer, sprites = this.spriteBySlot;
+    for (let i = 0, o = 0; i < n; i++, o += ES) {
+      const v = vis[i];
+      if (v === 0) continue;
+      const x = ix[i], y = iy[i], slot = v - 1, flags = f[o + 5], layer = f[o + 6];
+      const s = sprites[slot][flags & 3];
+      write(out, u, offs[slot]++, x - s.h, y - s.h, s.h * 2, s.h * 2, s, WHITE);
+      if (flags & 8) {
+        const r = rings_[layer];
+        write(out, u, ringAt++, x - r.h, y - r.h, r.h * 2, r.h * 2, r, WHITE);
+      }
+      if (flags & 16) {
+        const rad = RADIUS_BY_LAYER[layer], w = Math.max(14, rad * 2.2);
+        const fr = Math.max(0, f[o + 4]);
+        write(out, u, barAt, x - w / 2 - 1, y - rad - 9, w + 2, 5, white, BAR_BG);
+        write(out, u, barAt + 1, x - w / 2, y - rad - 8, w * fr, 3, white, BAR_COLORS[fr > 0.5 ? 0 : fr > 0.25 ? 1 : 2]);
+        barAt += 2;
+      }
+    }
+    const bullet = this.entries.get('bullet'), shell = this.entries.get('shell');
+    for (let i = 0, o = n * ES; i < np; i++, o += PS) {
+      const x = f[o + 2] + (f[o] - f[o + 2]) * alpha, y = f[o + 3] + (f[o + 1] - f[o + 3]) * alpha;
+      if (cull && (x < vx0 || x > vx1 || y < vy0 || y > vy1)) continue;
+      const s = f[o + 4] ? shell : bullet;
+      write(out, u, projAt++, x - s.h, y - s.h, s.h * 2, s.h * 2, s, WHITE);
     }
     return projAt;
   }

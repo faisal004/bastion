@@ -10,6 +10,14 @@ export const OPT_DEFS = [
     best: 'webgl',
   },
   {
+    key: 'sim', label: 'Simulation thread', reload: true,
+    choices: ['main', 'worker'],
+    names: { main: 'main thread (with drawing)', worker: 'Web Worker (parallel)' },
+    // Measured, not assumed: the worker did not raise the breaking point on the test machine
+    // (see NUMBERS.md section 5), so the main thread stays the default.
+    best: 'main',
+  },
+  {
     key: 'grid', label: 'Range queries',
     choices: ['off', 'on'],
     names: { off: 'scan every enemy', on: 'spatial hash grid' },

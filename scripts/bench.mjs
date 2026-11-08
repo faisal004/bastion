@@ -20,7 +20,7 @@ const url = args.url || 'http://localhost:5173';
 const mode = args.mode || 'ramp';
 const load = (args.load || '5000,100,1000').split(',').map(Number);
 const dpr = Number(args.dpr || 2);
-const query = args.query ? '&' + args.query : '';
+const query = (args.query ? '&' + args.query : '') + (Number(args.cpu) > 1 ? `&workercpu=${Number(args.cpu)}` : '');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 const port = 9300 + Math.floor(Math.random() * 500);
@@ -58,7 +58,10 @@ ws.onmessage = (m) => {
   const msg = JSON.parse(m.data);
   if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
 };
-const send = (method, params = {}) => new Promise((res) => { const id = ++seq; pending.set(id, res); ws.send(JSON.stringify({ id, method, params })); });
+const send = (method, params = {}, sessionId) => new Promise((res) => {
+  const id = ++seq; pending.set(id, res);
+  ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }));
+});
 async function evaluate(expression) {
   const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
   if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'eval failed');
@@ -80,8 +83,12 @@ try {
       version: window.bastion.lab.app.version() };
   })()`);
   const throttle = Number(args.cpu || 1);
-  if (throttle > 1) await send('Emulation.setCPUThrottlingRate', { rate: throttle });
-  console.log(`\n${env.version} · ${env.ua} · ${env.gpu} · ${env.viewport}@${env.dpr}x · ${args.headed ? 'headed' : 'headless'}${throttle > 1 ? ` · CPU throttled ${throttle}x` : ''}`);
+  if (throttle > 1) {
+    await send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    // DevTools throttling only applies to pages ("not supported for workers"), so the URL carries
+    // workercpu=N and the simulation worker emulates the same slowdown itself (see sim-worker.js).
+  }
+  console.log(`\n${env.version} · ${env.ua} · ${env.gpu} · ${env.viewport}@${env.dpr}x · ${args.headed ? 'headed' : 'headless'}${throttle > 1 ? ` · CPU throttled ${throttle}x (main via DevTools, worker via workercpu)` : ''}`);
   env.cpuThrottle = throttle;
 
   const cadence = await evaluate(`new Promise(res => { const ts = []; const f = t => { ts.push(t); ts.length < 31 ? requestAnimationFrame(f) : res(ts.slice(1).map((t, i) => t - ts[i])); }; requestAnimationFrame(f); })`);
@@ -133,11 +140,11 @@ try {
       if (s.n > shown) { shown = s.n; process.stderr.write(`  · ${s.status}\n`); }
       if (s.done) { result = s.done; break; }
     }
-    console.log('\n  enemies  towers  proj   avg fps  fps@95%  >33ms   sim ms  draw ms');
+    console.log('\n  enemies  towers  proj   avg fps  fps@95%  >33ms  sim speed   sim ms  draw ms');
     for (const p of result.points) {
-      const ok = p.fps95 >= 45 && p.pctOver33 <= 5;
+      const ok = p.fps95 >= 45 && p.pctOver33 <= 5 && !(p.simSpeed < 0.95);
       console.log(`  ${String(p.enemies).padStart(7)} ${String(p.towers).padStart(7)} ${String(p.projectiles).padStart(5)}` +
-        `  ${p.avgFps.toFixed(1).padStart(7)}  ${p.fps95.toFixed(1).padStart(7)}  ${(p.pctOver33.toFixed(1) + '%').padStart(6)}` +
+        `  ${p.avgFps.toFixed(1).padStart(7)}  ${p.fps95.toFixed(1).padStart(7)}  ${(p.pctOver33.toFixed(1) + '%').padStart(6)}  ${((p.simSpeed * 100).toFixed(0) + '%').padStart(8)}` +
         `  ${p.simMs.toFixed(2).padStart(7)}  ${p.drawMs.toFixed(2).padStart(7)}  ${ok ? 'pass' : 'FAIL'}`);
     }
     const f = (c) => (c ? `${c.enemies} enemies / ${c.towers} towers / ${c.projectiles} projectiles` : 'none');
@@ -152,7 +159,7 @@ try {
     })`);
     console.log(`\n  load ${result.enemies}/${result.towers}/${result.projectiles} (live ${result.liveEnemies} enemies, ${result.liveProjectiles} projectiles)`);
     console.log(`  avg ${result.avgFps} fps · 95% of frames ≥ ${result.fps95} fps · ${result.pctAt45}% frames ≥45fps · ${result.pctOver33}% frames >33ms`);
-    console.log(`  sim ${result.simMs} ms · draw ${result.drawMs} ms per frame\n`);
+    console.log(`  sim ${result.simMs} ms · draw ${result.drawMs} ms per frame · sim speed ${(result.simSpeed * 100).toFixed(0)}% of real time\n`);
   }
   if (args.out) writeFileSync(args.out, JSON.stringify({ env, mode, result }, null, 2));
   if (args.shot) {
