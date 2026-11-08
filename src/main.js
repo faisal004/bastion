@@ -203,6 +203,12 @@ window.addEventListener('keydown', (e) => {
   const typeByKey = C.TOWER_TYPES.find((t) => C.TOWERS[t].key === k);
   if (typeByKey) { actions.selectBuild(typeByKey); return; }
   switch (k) {
+    case 'm':
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        game.enableUnlimitedGold();
+        ui.toast('Cheat activated: unlimited gold', 'gold');
+      }
+      break;
     case ' ': e.preventDefault(); actions.togglePause(); break;
     case 'f': actions.cycleSpeed(); break;
     case 'n': actions.nextWave(); break;

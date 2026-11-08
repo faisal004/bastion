@@ -88,7 +88,7 @@ export class UI {
   update() {
     const g = this.game, v = this.view, ctl = this.ctl;
     this.set('lives', 'text', String(g.lives));
-    this.set('gold', 'text', g.stress ? '∞' : String(g.gold));
+    this.set('gold', 'text', g.stress || g.gold === Infinity ? '∞' : String(g.gold));
     this.set('wave', 'text', `${g.wave}/${C.MAX_WAVE}`);
     this.set('score', 'text', g.score.toLocaleString());
     this.set('s-lives', 'class', 'stat' + (g.baseHit > 0 ? ' hurt' : '') + (g.lives <= 5 ? ' low' : ''));

@@ -58,6 +58,7 @@ New enemy types arrive as the waves go on, so the game gets steadily harder.
 | `Space` | Pause |
 | `F` | Game speed 1× → 2× → 4× |
 | `R` (twice) | Restart |
+| `Shift+M` | Cheat: unlimited gold until restart |
 | Sound on / Sound off | Toggle sound effects (preference is saved) |
 | Wheel / pinch | Zoom |
 | Drag, right-drag, `WASD` / arrows | Pan |

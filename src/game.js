@@ -109,6 +109,8 @@ export class Game {
     this.tmp = { x: 0, y: 0, dx: 0, dy: 0, seg: 0 };
   }
 
+  enableUnlimitedGold() { this.gold = Infinity; }
+
   sound(kind) { if (!this.stress) this.soundEvents.add(kind); }
 
   // ---------- path ----------

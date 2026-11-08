@@ -26,6 +26,7 @@ function command(m) {
     case 'sell': { const t = towerAt(m); if (t) game.sellTower(t); break; }
     case 'mode': { const t = towerAt(m); if (t) game.cycleMode(t); break; }
     case 'wave': game.startNextWave(); break;
+    case 'unlimitedGold': game.enableUnlimitedGold(); break;
     case 'reset': stressCfg = null; game.reset(); break;
     case 'stress': stressCfg = m.cfg; stressSetup(game, stressCfg); break;
   }

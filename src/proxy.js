@@ -94,6 +94,8 @@ export class GameProxy {
   get projectileCount() { return this.np; }
 
   // ---------- commands (optimistic where the UI needs instant feedback) ----------
+  enableUnlimitedGold() { this.gold = Infinity; this.cmd('unlimitedGold'); }
+
   placeTower(type, c, r) {
     const def = C.TOWERS[type];
     if (!this.canPlace(c, r) || this.gold < def.cost) return null;
