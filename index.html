@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bastion — Tower Defense</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="hud">
+      <div class="brand">BASTION</div>
+      <div class="stat" id="s-lives" title="Lives"><span class="ico heart"></span><b id="lives">0</b></div>
+      <div class="stat" title="Gold"><span class="ico coin"></span><b id="gold">0</b></div>
+      <div class="stat"><span class="lbl">Wave</span><b id="wave">0/50</b></div>
+      <div class="stat"><span class="lbl">Score</span><b id="score">0</b></div>
+      <div id="preview" class="preview"></div>
+      <div class="spacer"></div>
+      <button id="btn-next" class="primary" title="Next wave (N)">Start Wave 1</button>
+      <button id="btn-pause" title="Pause (Space)">Pause</button>
+      <button id="btn-speed" title="Game speed (F)">1×</button>
+      <button id="btn-restart" title="Restart (R)">Restart</button>
+    </header>
+    <main id="stage">
+      <canvas id="game"></canvas>
+      <div id="toasts"></div>
+      <div id="perf"></div>
+      <div id="overlay" class="overlay hidden"></div>
+    </main>
+    <aside id="side">
+      <h3>Build</h3>
+      <div id="shop"></div>
+      <div id="sel" class="hidden"></div>
+      <div class="help">
+        <div><kbd>Shift</kbd>+click to keep building</div>
+        <div><kbd>Esc</kbd> cancel · <kbd>0</kbd> reset view · <kbd>`</kbd> perf</div>
+      </div>
+    </aside>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
