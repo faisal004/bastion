@@ -59,7 +59,46 @@ Two settings:
 
 ## Optimizations
 
-_(one row per optimization, filled in as each lands)_
+Each optimization is a runtime switch (Stress Lab panel, the `G` hotkey, or `?opt=render:webgl`),
+so before and after are measured on the same build. "Before" re-runs the previous configuration
+in the same session.
 
-| # | Optimization | Breaks at, 4× CPU (before → after) | Target load fps@95% (before → after) |
-|---|---|---|---|
+| # | Optimization | Breaks at, 4× CPU (before → after) | Breaks at, native (before → after) | Draw ms at 5k/100/1k, 4× CPU |
+|---|---|---|---|---|
+| 1 | WebGL2 instanced entity renderer | 7,500 → **15,000** enemies | 15,000 → **30,000** enemies | 10.11 → **2.47** |
+
+### 1 · Entity rendering: what was tried
+
+All runs: 4× CPU, same build (`?baseline&opt=render:<mode>`), ramp over all three loads.
+
+| Renderer | Idea | Last passing | Breaks at | JS draw ms at 5k | Verdict |
+|---|---|---|---|---:|---|
+| `naive` | `beginPath`/`arc`/`fill`/`stroke` per enemy | 5,000 | 7,500 | 10.11 | baseline |
+| `paths` | one path per enemy type, one fill + one stroke | 3,000 | **4,000** | 13.85 | ✗ slower |
+| `sprites` | pre-rendered sprite per type, `drawImage` per enemy | 4,000 | **5,000** | 8.56 | ✗ slower |
+| `sprites` + `ImageBitmap` | same, GPU-resident sources | — | — | 8.94 (bench at 5k: 44.7 avg fps) | ✗ no change |
+| **`webgl`** | **one typed-array upload + one instanced draw call** | **10,000** | **15,000** | **2.47** | ✓ kept |
+
+Why the Canvas 2D "optimizations" lost:
+- Chrome's Canvas 2D runs on Skia, which already merges consecutive anti-aliased circle draws
+  into one GPU op, even across fill colors. So the naive renderer was GPU-batched underneath.
+- One giant path with thousands of sub-paths has to be tessellated as a whole, which costs more
+  than many small analytic circles. `drawImage` from many source images cannot be merged the same way.
+- What actually limits Canvas 2D is the **main-thread cost per API call** (about 2 µs under 4× throttling).
+  Any Canvas 2D strategy still makes thousands of calls per frame. WebGL instancing replaces all
+  of them with one `bufferSubData` and one `drawArraysInstanced`.
+
+Full ramps: `bench/results/opt1-render-*.json`.
+
+### After optimization 1 — full ramp, 4× CPU
+| Enemies | Towers | Projectiles | avg fps | fps @95% | >33 ms | sim ms | draw ms | |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 5,000 | 100 | 1,000 | 60.0 | 56.8 | 0.0% | 1.08 | 2.47 | pass |
+| 7,500 | 150 | 1,500 | 60.0 | 57.1 | 0.0% | 1.88 | 3.26 | pass |
+| 10,000 | 200 | 2,000 | 60.0 | 57.1 | 0.0% | 2.99 | 4.48 | pass |
+| 15,000 | 300 | 3,000 | 53.4 | 29.9 | 6.2% | 7.01 | 6.77 | **FAIL** |
+| 20,000 | 400 | 4,000 | 30.0 | 15.0 | 39.8% | 21.32 | 9.41 | FAIL |
+| 30,000 | 600 | 6,000 | 2.1 | 1.7 | 100.0% | 472.21 | 13.70 | FAIL |
+
+The bottleneck has moved: from 15k enemies up, **simulation** time passes draw time and then
+explodes (472 ms at 30k). That is the O(towers × enemies) target search and splash, and it is next.

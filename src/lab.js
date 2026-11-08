@@ -2,6 +2,7 @@
 // records frame times, and ramps the load to find where FPS breaks.
 // Open with `L` or ?lab. ?stress=5000,100,1000 applies a load on load.
 import * as C from './config.js';
+import { OPT_DEFS, opts } from './opts.js';
 
 export const TARGET = { enemies: 5000, towers: 100, projectiles: 1000 };
 const STRESS_TYPES = ['grunt', 'grunt', 'runner', 'tank', 'swarm', 'swarm', 'flyer'];
@@ -67,6 +68,8 @@ export class Lab {
         <div><b id="lab-o33">–</b><span>&gt;33 ms</span></div>
       </div>
       <canvas id="lab-graph"></canvas>
+      <div class="lab-opts">${OPT_DEFS.map((d) => `<label class="lab-opt"><span>${d.label}</span>
+        <select data-opt="${d.key}">${d.choices.map((c) => `<option value="${c}">${d.names?.[c] || c}</option>`).join('')}</select></label>`).join('')}</div>
       <div class="lab-counts" id="lab-counts"></div>
       ${this.slider('enemies', 'Enemies', 0, 40000, 250)}
       ${this.slider('towers', 'Towers', 0, MAX_TOWERS, 10)}
@@ -114,6 +117,10 @@ export class Lab {
       else if (a === 'copy') navigator.clipboard?.writeText(JSON.stringify(this.results, null, 2));
       else if (a === 'clear') { this.results = []; this.save(); this.renderResults(); }
     });
+    for (const sel of el.querySelectorAll('[data-opt]')) {
+      sel.value = opts[sel.dataset.opt];
+      sel.onchange = () => { opts[sel.dataset.opt] = sel.value; this.$('lab-ver').textContent = this.app.version(); };
+    }
     // keep game hotkeys from firing while using the panel's inputs
     el.addEventListener('keydown', (e) => e.stopPropagation());
     this.renderResults();
@@ -140,6 +147,11 @@ export class Lab {
     const ctx = cv.getContext('2d');
     ctx.scale(dpr, dpr);
     return { cv, ctx, w, h };
+  }
+
+  syncOpts() {
+    for (const sel of this.el.querySelectorAll('[data-opt]')) sel.value = opts[sel.dataset.opt];
+    this.$('lab-ver').textContent = this.app.version();
   }
 
   get visible() { return !this.el.classList.contains('hidden'); }

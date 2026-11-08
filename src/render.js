@@ -2,17 +2,39 @@
 // v0 baseline: background redrawn per tile every frame, each entity drawn
 // with its own path + fillStyle change, no culling.
 import * as C from './config.js';
+import { opts } from './opts.js';
+import { addShape, dirIndex, paintEnemy, spriteHalf } from './shapes.js';
+import { GLRenderer } from './glrender.js';
 
 const { TILE, COLS, ROWS, WORLD_W, WORLD_H } = C;
 const TAU = Math.PI * 2;
+// Batched draw order = layer order: small ground units at the bottom, flyers on top.
+const ENEMY_TYPES = ['swarm', 'runner', 'grunt', 'tank', 'boss', 'flyer'];
+const BAR_COLORS = ['#68d391', '#f6e05e', '#fc8181'];
 
+// Layers (bottom to top): #game 2D (ground, base, towers [+ everything in 2D modes]),
+// #gl WebGL2 (entities, webgl mode only), #fx 2D (effects + world overlay, webgl mode only).
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.w = 0; this.h = 0; this.dpr = 1;
     this.t = 0;
+    const layer = (id) => {
+      const c = document.createElement('canvas');
+      c.id = id;
+      c.className = 'layer';
+      canvas.after(c);
+      return c;
+    };
+    this.fxCanvas = layer('fx');
+    this.glCanvas = layer('gl'); // inserted right after #game, so it sits below #fx
+    this.fx = this.fxCanvas.getContext('2d');
+    this.glr = new GLRenderer(this.glCanvas);
+    this.layersDirty = false;
   }
+
+  get glActive() { return opts.render === 'webgl' && this.glr.ok; }
 
   resize(w, h) {
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -21,6 +43,12 @@ export class Renderer {
     this.canvas.height = Math.round(h * this.dpr);
     this.canvas.style.width = w + 'px';
     this.canvas.style.height = h + 'px';
+    for (const c of [this.fxCanvas, this.glCanvas]) {
+      c.style.width = w + 'px';
+      c.style.height = h + 'px';
+    }
+    this.fxCanvas.width = this.canvas.width; this.fxCanvas.height = this.canvas.height;
+    this.glr.resize(this.canvas.width, this.canvas.height);
   }
 
   draw(game, cam, alpha, view, realDt) {
@@ -35,9 +63,36 @@ export class Renderer {
 
     this.drawGround(game, view);
     this.drawBase(game);
+    this.scale = s;
     for (const t of game.towers) this.drawTower(t, game, t === view.selected);
-    for (const e of game.enemies) this.drawEnemy(e, alpha);
-    for (const p of game.projectiles) this.drawProjectile(p, alpha);
+
+    if (this.glActive) {
+      this.glr.draw(game, cam, s, alpha);
+      // effects + overlay must sit above the GL entities, so they go on the top 2D layer
+      const fx = this.fx;
+      fx.setTransform(1, 0, 0, 1, 0, 0);
+      fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
+      fx.setTransform(s, 0, 0, s, -cam.x * s, -cam.y * s);
+      this.ctx = fx;
+      this.drawEffects(game);
+      this.drawOverlayWorld(game, view);
+      this.ctx = ctx;
+      this.layersDirty = true;
+      return;
+    }
+    if (this.layersDirty) { // switched away from webgl: wipe the upper layers once
+      this.layersDirty = false;
+      this.glr.clear();
+      this.fx.setTransform(1, 0, 0, 1, 0, 0);
+      this.fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
+    }
+    if (opts.render === 'naive') {
+      for (const e of game.enemies) this.drawEnemy(e, alpha);
+      for (const p of game.projectiles) this.drawProjectile(p, alpha);
+    } else {
+      this.drawEnemiesBatched(game.enemies, alpha, opts.render !== 'paths');
+      this.drawProjectilesBatched(game.projectiles, alpha);
+    }
     this.drawEffects(game);
     this.drawOverlayWorld(game, view);
   }
@@ -241,6 +296,161 @@ export class Renderer {
       const f = Math.max(0, e.hp / e.maxHp);
       ctx.fillStyle = f > 0.5 ? '#68d391' : f > 0.25 ? '#f6e05e' : '#fc8181';
       ctx.fillRect(bx, by, w * f, h);
+    }
+  }
+
+  // ---------- batched drawing ----------
+  // Enemies are bucketed by type, then each bucket is one path + one fill + one stroke
+  // ("paths"), or one drawImage per enemy from a pre-rendered sprite ("sprites").
+  drawEnemiesBatched(enemies, alpha, sprites) {
+    const ctx = this.ctx;
+    const B = this.buckets || (this.buckets = Object.fromEntries(ENEMY_TYPES.map((k) => [k, []])));
+    const hits = this.hits || (this.hits = []);
+    for (const k of ENEMY_TYPES) B[k].length = 0;
+    hits.length = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (e.hitT > 0) hits.push(e); else B[e.type].push(e);
+    }
+
+    if (sprites) {
+      const q = this.spriteQuality();
+      for (const type of ENEMY_TYPES) {
+        const list = B[type];
+        if (!list.length) continue;
+        if (C.ENEMIES[type].shape === 'hex') { this.pathBucket(list, alpha, C.ENEMIES[type].color, true); continue; }
+        this.stampBucket(list, alpha, type, false, q);
+      }
+      if (hits.length) {
+        for (const e of hits) {
+          if (e.def.shape === 'hex') { this.pathBucket([e], alpha, '#ffffff', true); continue; }
+          const spr = this.sprite(e.type, true, e.def.shape === 'triangle' ? dirIndex(e) : 0, q);
+          const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha;
+          ctx.drawImage(spr.c, x - spr.h, y - spr.h, spr.h * 2, spr.h * 2);
+        }
+      }
+    } else {
+      // flyer shadows (one path)
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (!e.def.flying) continue;
+        const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha, r = e.def.radius * TILE;
+        ctx.moveTo(x + 4 + r * 0.9, y + 10);
+        ctx.ellipse(x + 4, y + 10, r * 0.9, r * 0.45, 0, 0, TAU);
+      }
+      ctx.fill();
+      for (const type of ENEMY_TYPES) if (B[type].length) this.pathBucket(B[type], alpha, C.ENEMIES[type].color, true);
+      if (hits.length) this.pathBucket(hits, alpha, '#ffffff', true);
+    }
+
+    // slow rings (one path)
+    ctx.strokeStyle = 'rgba(144,205,244,0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (e.slowT <= 0) continue;
+      const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha, r = e.def.radius * TILE + 3;
+      ctx.moveTo(x + r, y);
+      ctx.arc(x, y, r, 0, TAU);
+    }
+    ctx.stroke();
+
+    // health bars: one path for all backgrounds, one per fill color
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath();
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (e.hp >= e.maxHp) continue;
+      const r = e.def.radius * TILE, w = Math.max(14, r * 2.2);
+      const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha;
+      ctx.rect(x - w / 2 - 1, y - r - 9, w + 2, 5);
+    }
+    ctx.fill();
+    for (let c = 0; c < 3; c++) {
+      ctx.fillStyle = BAR_COLORS[c];
+      ctx.beginPath();
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i];
+        if (e.hp >= e.maxHp) continue;
+        const f = Math.max(0, e.hp / e.maxHp);
+        if ((f > 0.5 ? 0 : f > 0.25 ? 1 : 2) !== c) continue;
+        const r = e.def.radius * TILE, w = Math.max(14, r * 2.2);
+        const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha;
+        ctx.rect(x - w / 2, y - r - 8, w * f, 3);
+      }
+      ctx.fill();
+    }
+  }
+
+  pathBucket(list, alpha, color, stroke) {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha;
+      addShape(ctx, e.def.shape, x, y, e.def.radius * TILE, e.dirX, e.dirY, this.t);
+    }
+    ctx.fillStyle = color;
+    ctx.fill();
+    if (stroke) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  stampBucket(list, alpha, type, hit, q) {
+    const ctx = this.ctx;
+    const directional = C.ENEMIES[type].shape === 'triangle';
+    let spr = this.sprite(type, hit, 0, q);
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (directional) spr = this.sprite(type, hit, dirIndex(e), q);
+      const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha;
+      ctx.drawImage(spr.c, x - spr.h, y - spr.h, spr.h * 2, spr.h * 2);
+    }
+  }
+
+  // Sprite resolution follows the camera scale (in 0.5 steps) so sprites stay crisp when zoomed.
+  spriteQuality() {
+    const q = Math.min(8, Math.max(0.5, Math.ceil(this.scale * 2) / 2));
+    if (q !== this.sprQ) { this.sprQ = q; this.sprites = new Map(); }
+    return q;
+  }
+
+  sprite(type, hit, dir, q) {
+    const key = type + (hit ? '!' : '') + dir;
+    let s = this.sprites.get(key);
+    if (s) return s;
+    const def = C.ENEMIES[type];
+    const h = spriteHalf(def);
+    const px = Math.ceil(h * 2 * q);
+    const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(px, px) : Object.assign(document.createElement('canvas'), { width: px, height: px });
+    const g = c.getContext('2d');
+    g.scale(px / (h * 2), px / (h * 2));
+    g.translate(h, h);
+    paintEnemy(g, def, hit, dir);
+    s = { c, h };
+    this.sprites.set(key, s);
+    return s;
+  }
+
+  drawProjectilesBatched(projectiles, alpha) {
+    const ctx = this.ctx;
+    for (const [kind, r, color] of [['bullet', 2.5, '#b2f5ea'], ['shell', 5, '#1a202c'], ['shell', 3, '#f6ad55']]) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      for (let i = 0; i < projectiles.length; i++) {
+        const p = projectiles[i];
+        if ((p.kind === 'shell') !== (kind === 'shell')) continue;
+        const x = p.px + (p.x - p.px) * alpha, y = p.py + (p.y - p.py) * alpha;
+        ctx.moveTo(x + r, y);
+        ctx.arc(x, y, r, 0, TAU);
+      }
+      ctx.fill();
     }
   }
 

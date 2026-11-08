@@ -88,7 +88,28 @@ try {
   console.log(`  idle frame cadence: ${(cadence.reduce((a, b) => a + b, 0) / cadence.length).toFixed(1)} ms (${Math.round(1000 / (cadence.reduce((a, b) => a + b, 0) / cadence.length))} Hz)`);
 
   let result;
-  if (mode === 'ramp') {
+  if (mode === 'shots') {
+    // Same paused scene rendered once per choice of one switch: --opt-key render
+    const key = args['opt-key'] || 'render';
+    const choices = await evaluate(`(async () => {
+      const b = window.bastion; const { OPT_DEFS } = await import('/src/opts.js');
+      b.lab.setSliders({ enemies: ${load[0]}, towers: ${load[1]}, projectiles: ${load[2]} }); b.lab.apply(b.lab.cfg);
+      await new Promise(r => setTimeout(r, 1500));
+      b.lab.toggle(false); b.ctl.paused = true;
+      document.head.insertAdjacentHTML('beforeend', '<style>#overlay,#perf,#toasts{display:none!important}</style>');
+      b.cam.zoom = ${Number(args.zoom || 2.4)}; b.cam.x = ${Number(args.camx || 100)}; b.cam.y = ${Number(args.camy || 60)};
+      return OPT_DEFS.find(d => d.key === ${JSON.stringify(key)}).choices;
+    })()`);
+    for (const c of choices) {
+      await evaluate(`(async () => { (await import('/src/opts.js')).opts[${JSON.stringify(key)}] = ${JSON.stringify(c)};
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
+      const rect = await evaluate(`(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
+      const shot = await send('Page.captureScreenshot', { format: 'png', clip: { ...rect, scale: 1 } });
+      const file = `${args.dir || 'docs'}/${key}-${c}.png`;
+      writeFileSync(file, Buffer.from(shot.result.data, 'base64'));
+      console.log(`  ${file}`);
+    }
+  } else if (mode === 'ramp') {
     await evaluate(`window.__rampDone = null; window.addEventListener('lab:ramp-done', e => (window.__rampDone = e.detail), { once: true });
       window.bastion.lab.startRamp(${JSON.stringify(args.ramp || 'all')}); true`);
     let shown = 0;

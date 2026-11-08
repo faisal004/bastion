@@ -61,6 +61,7 @@ New enemy types arrive as the waves go on, so the game gets steadily harder.
 | Drag, right-drag, `WASD` / arrows | Pan |
 | `` ` `` | Toggle the performance overlay |
 | `L` | Open the Stress Lab |
+| `G` | Toggle renderer: original Canvas 2D ↔ WebGL2 (for before/after demos) |
 | `Esc` | Cancel placement / deselect |
 
 ---
@@ -73,7 +74,10 @@ server.js                 zero-dependency static file server
 src/
   config.js               all game data: map, towers, enemies, wave generator, balance curves
   game.js                 simulation (pure state + fixed-step update); knows nothing about the DOM
-  render.js               Canvas 2D renderer; reads game state, never changes it
+  render.js               layered renderer: Canvas 2D ground/towers/effects + mode switch for entities
+  glrender.js             WebGL2 instanced entity renderer (one draw call) + sprite atlas
+  shapes.js               enemy shape painting shared by every renderer
+  opts.js                 runtime optimization switches (?baseline, ?opt=key:value)
   ui.js                   DOM HUD / shop / selection panel; writes to the DOM only when values change
   main.js                 bootstrap, the single frame loop, input, camera, perf meter
   bot.js                  headless autoplayer, used for balance tuning and long-run tests
@@ -110,14 +114,56 @@ separately from drawing.
 
 ## Rendering approach
 
-Canvas 2D with a world-space camera (zoom and pan) and a device-pixel-ratio-aware
-backing store.
+Three stacked canvases share one world-space camera (zoom and pan) and a backing store
+that accounts for device pixel ratio:
+
+| Layer | API | Draws |
+|---|---|---|
+| `#game` (bottom) | Canvas 2D | ground, road, rocks, base, towers |
+| `#gl` | **WebGL2, instanced** | enemies, health bars, slow rings, projectiles |
+| `#fx` (top) | Canvas 2D | effects (rings, tracers, damage text), range and placement overlays |
+
+**The WebGL layer** ([src/glrender.js](src/glrender.js)):
+- Every entity becomes one instance in an interleaved `Float32Array`: a world rect, an atlas UV
+  rect and a packed RGBA8 tint, 36 bytes each.
+- Each frame is one `bufferSubData` plus **one `drawArraysInstanced`**, whatever the entity count.
+- Sprites live in a texture atlas painted by the same shape code the Canvas 2D renderer uses
+  ([src/shapes.js](src/shapes.js)), so every mode looks the same.
+- The atlas is repainted only when the zoom crosses a 0.5× step, so sprites stay crisp.
+- Health bars use a solid texel from the atlas and a tint, so they go out in the same draw call.
+
+The low-count layers (towers, effects, UI overlays) stay in Canvas 2D, because it is simpler
+and they are not hot. The older Canvas 2D entity renderers are still there as switchable
+modes (`naive`, `paths`, `sprites`) for comparison.
 
 ## Performance
 
-Numbers live in [`NUMBERS.md`](NUMBERS.md). Baseline summary (Apple M5, 4× CPU throttle):
-the first implementation just passes the target 5k/100/1k and **breaks at 7.5k enemies /
-150 towers / 1.5k projectiles**. Drawing is the first bottleneck; the O(n²) simulation is the next.
+Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle):
+
+| Build | Breaks at (enemies / towers / projectiles) |
+|---|---|
+| Baseline | 7,500 / 150 / 1,500 |
+| + WebGL2 instanced renderer | 15,000 / 300 / 3,000 |
+
+### Bottlenecks found
+1. **Per-call Canvas 2D overhead (fixed).** At the target load, drawing cost 10 ms per frame
+   versus 1 ms for the simulation, and nearly all of it was the main-thread cost of thousands
+   of `arc`/`fill`/`fillRect` calls.
+   - Batching into big paths made it worse: Skia must tessellate the whole path.
+   - Sprites drawn with `drawImage` were also worse: Skia cannot merge draws from different sources.
+   - WebGL instancing fixed it. See NUMBERS.md for the full comparison.
+2. **O(towers × enemies) simulation (next).** Target search and splash damage scan every enemy,
+   and `filter()` reallocates arrays every step. After fix 1 this dominates from about 15k enemies.
+
+### Optimizations
+| # | What | Switch |
+|---|---|---|
+| 1 | WebGL2 instanced entity renderer (one draw call) | `render`: naive / paths / sprites / **webgl** |
+
+Every optimization is a runtime switch, so before and after run on the same build:
+- `?baseline` starts with every switch at its original setting.
+- `?opt=render:webgl` sets one switch.
+- The Stress Lab panel flips switches live, and `G` toggles the renderer during play.
 
 ### How performance is measured
 
@@ -159,9 +205,8 @@ Roadmap:
    live:
    - spatial hash grid for target and splash queries
    - struct-of-arrays / typed-array pools with swap-remove (no per-frame allocation, no GC churn)
-   - batched rendering (one path per enemy type / color, sprite atlases)
+   - ✅ instanced WebGL2 rendering (batched paths and sprite atlases were tried first, and lost)
    - viewport culling
    - a cached static background layer
-   - possibly a WebGL instanced renderer, if Canvas 2D becomes the ceiling
 4. **Measurement write-up** — a methodology section, plus `NUMBERS.md` with a
    before/after table for each optimization.

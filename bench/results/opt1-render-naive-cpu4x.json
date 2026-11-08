@@ -1,0 +1,129 @@
+{
+  "env": {
+    "ua": "Chrome/156.0.0.0",
+    "dpr": 2,
+    "viewport": "1403x836",
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M5, Unspecified Version)",
+    "version": "baseline",
+    "cpuThrottle": 4
+  },
+  "mode": "ramp",
+  "result": {
+    "mode": "all",
+    "version": "baseline",
+    "label": "ramp",
+    "time": "2026-11-08T04:39:57.409Z",
+    "lastPassing": {
+      "enemies": 5000,
+      "towers": 100,
+      "projectiles": 1000
+    },
+    "breaksAt": {
+      "enemies": 7500,
+      "towers": 150,
+      "projectiles": 1500
+    },
+    "points": [
+      {
+        "enemies": 500,
+        "towers": 10,
+        "projectiles": 100,
+        "avgFps": 60,
+        "fps95": 57.1,
+        "pctOver33": 0,
+        "simMs": 0.06,
+        "drawMs": 1.17
+      },
+      {
+        "enemies": 1000,
+        "towers": 20,
+        "projectiles": 200,
+        "avgFps": 60,
+        "fps95": 56.8,
+        "pctOver33": 0,
+        "simMs": 0.11,
+        "drawMs": 1.96
+      },
+      {
+        "enemies": 2000,
+        "towers": 40,
+        "projectiles": 400,
+        "avgFps": 60,
+        "fps95": 56.8,
+        "pctOver33": 0,
+        "simMs": 0.29,
+        "drawMs": 4.05
+      },
+      {
+        "enemies": 3000,
+        "towers": 60,
+        "projectiles": 600,
+        "avgFps": 60,
+        "fps95": 56.8,
+        "pctOver33": 0,
+        "simMs": 0.49,
+        "drawMs": 6.16
+      },
+      {
+        "enemies": 4000,
+        "towers": 80,
+        "projectiles": 800,
+        "avgFps": 59.7,
+        "fps95": 57.1,
+        "pctOver33": 0,
+        "simMs": 0.81,
+        "drawMs": 8.12
+      },
+      {
+        "enemies": 5000,
+        "towers": 100,
+        "projectiles": 1000,
+        "avgFps": 59.7,
+        "fps95": 56.8,
+        "pctOver33": 0,
+        "simMs": 1.16,
+        "drawMs": 10.11
+      },
+      {
+        "enemies": 7500,
+        "towers": 150,
+        "projectiles": 1500,
+        "avgFps": 38.2,
+        "fps95": 29.2,
+        "pctOver33": 20.7,
+        "simMs": 3.58,
+        "drawMs": 15.43
+      },
+      {
+        "enemies": 10000,
+        "towers": 200,
+        "projectiles": 2000,
+        "avgFps": 28.7,
+        "fps95": 20,
+        "pctOver33": 43.7,
+        "simMs": 6.57,
+        "drawMs": 19.7
+      },
+      {
+        "enemies": 15000,
+        "towers": 300,
+        "projectiles": 3000,
+        "avgFps": 15.7,
+        "fps95": 12,
+        "pctOver33": 98,
+        "simMs": 23.18,
+        "drawMs": 36.85
+      },
+      {
+        "enemies": 20000,
+        "towers": 400,
+        "projectiles": 4000,
+        "avgFps": 7.1,
+        "fps95": 6,
+        "pctOver33": 100,
+        "simMs": 87.4,
+        "drawMs": 50.8
+      }
+    ]
+  }
+}

@@ -4,8 +4,9 @@ import { Game } from './game.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
 import { Lab } from './lab.js';
+import { initOpts, optsLabel, opts, OPT_DEFS } from './opts.js';
 
-const VERSION = 'v0 baseline';
+initOpts();
 
 const canvas = document.getElementById('game');
 const stage = document.getElementById('stage');
@@ -60,7 +61,7 @@ const actions = {
 };
 
 const ui = new UI(game, view, ctl, actions);
-const lab = new Lab({ game, ctl, ui, view, version: () => VERSION });
+const lab = new Lab({ game, ctl, ui, view, version: optsLabel });
 
 {
   const q = new URLSearchParams(location.search);
@@ -198,6 +199,13 @@ window.addEventListener('keydown', (e) => {
     case 'escape': view.placing = null; view.selected = null; break;
     case '`': perfEl.classList.toggle('hidden'); break;
     case 'l': lab.toggle(); break;
+    case 'g': { // demo toggle: original renderer <-> best renderer
+      const d = OPT_DEFS.find((x) => x.key === 'render');
+      opts.render = opts.render === d.best ? d.choices[0] : d.best;
+      lab.syncOpts();
+      ui.toast(`Renderer: ${d.names[opts.render]}`, 'warn');
+      break;
+    }
     case '0': camTouched = false; fitCamera(); break;
   }
 });
