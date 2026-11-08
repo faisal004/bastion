@@ -60,6 +60,7 @@ New enemy types arrive as the waves go on, so the game gets steadily harder.
 | Wheel / pinch | Zoom |
 | Drag, right-drag, `WASD` / arrows | Pan |
 | `` ` `` | Toggle the performance overlay |
+| `L` | Open the Stress Lab |
 | `Esc` | Cancel placement / deselect |
 
 ---
@@ -76,6 +77,9 @@ src/
   ui.js                   DOM HUD / shop / selection panel; writes to the DOM only when values change
   main.js                 bootstrap, the single frame loop, input, camera, perf meter
   bot.js                  headless autoplayer, used for balance tuning and long-run tests
+  lab.js                  Stress Lab: fixed-load harness, frame-time recorder, breaking-point ramp
+scripts/bench.mjs         zero-dependency Chrome/DevTools benchmark runner
+bench/results/            raw JSON from benchmark runs
 ```
 
 **Balance** is tuned with `bot.js`, which plays complete games headlessly in about
@@ -111,7 +115,37 @@ backing store.
 
 ## Performance
 
-_(planned — filled in as each optimization step lands; numbers live in `NUMBERS.md`)_
+Numbers live in [`NUMBERS.md`](NUMBERS.md). Baseline summary (Apple M5, 4× CPU throttle):
+the first implementation just passes the target 5k/100/1k and **breaks at 7.5k enemies /
+150 towers / 1.5k projectiles**. Drawing is the first bottleneck; the O(n²) simulation is the next.
+
+### How performance is measured
+
+**Stress Lab** (in game: press `L`, or open `/?lab`; `/?stress=5000,100,1000` applies a load on page load).
+- It holds the game at a fixed number of enemies, towers and projectiles. Enemies loop the road
+  forever and are refilled as they die. Towers are max level, a mix of all four types, placed
+  along the road. Extra projectiles fly at random enemies until the projectile count reaches the target.
+- It records the real time between `requestAnimationFrame` callbacks, which is what the player
+  sees. It also records the JavaScript cost of sim and draw.
+  - **avg fps**: 1000 / mean frame time.
+  - **fps @95%**: 1000 / p95 frame time. This is the frame rate that 95% of frames meet.
+    The brief requires ≥ 45.
+  - **>33 ms**: the share of frames slower than 33 ms. The brief requires < 5%.
+- A live frame-time graph turns yellow below 45 fps and red below 30 fps.
+- **Find breaking point** ramps the load from 10% to 800% of the target and plots fps per step.
+  It then marks the first step that fails either criterion.
+
+**`scripts/bench.mjs`** is the same measurement, automated and reproducible:
+```bash
+node server.js &
+node scripts/bench.mjs --headed            # ramp in a real Chrome window
+node scripts/bench.mjs --headed --cpu 4    # same, with DevTools 4× CPU throttling
+node scripts/bench.mjs --headed --mode bench --load 5000,100,1000
+```
+- It launches Chrome with a throwaway profile, at 2× DPR, with background throttling disabled.
+- It drives the Stress Lab over the DevTools protocol, prints a table, and can save JSON
+  (`--out`) and a screenshot (`--shot`).
+- Use `--headed`. Headless Chrome reported 60 fps at loads where the real window could not keep up.
 
 Roadmap:
 
@@ -119,9 +153,8 @@ Roadmap:
    `filter()` to remove dead entities, O(towers × enemies) target search, O(enemies)
    splash search, every shape drawn with its own path and fill-style change, and no
    culling. This is the "initial implementation" that the later steps are compared against.
-2. **Stress harness** — a `?stress` mode that spawns N enemies, T towers and P projectiles
-   on demand, plus a frame-time recorder (p50/p95, % of frames > 33 ms, FPS). It is used
-   to find where the baseline breaks, with live sliders shown in the browser.
+2. ✅ **Stress harness** — the Stress Lab and `scripts/bench.mjs` described above.
+   The baseline's breaking point is recorded in `NUMBERS.md`.
 3. **Optimization steps**, each behind a runtime toggle so before and after can be shown
    live:
    - spatial hash grid for target and splash queries

@@ -88,14 +88,15 @@ export class UI {
   update() {
     const g = this.game, v = this.view, ctl = this.ctl;
     this.set('lives', 'text', String(g.lives));
-    this.set('gold', 'text', String(g.gold));
+    this.set('gold', 'text', g.stress ? '∞' : String(g.gold));
     this.set('wave', 'text', `${g.wave}/${C.MAX_WAVE}`);
     this.set('score', 'text', g.score.toLocaleString());
     this.set('s-lives', 'class', 'stat' + (g.baseHit > 0 ? ' hurt' : '') + (g.lives <= 5 ? ' low' : ''));
 
     // next wave button
     let label, dis = !g.canCallWave();
-    if (g.state === 'ready') label = 'Start Wave 1';
+    if (g.stress) { label = 'Stress test running'; dis = true; }
+    else if (g.state === 'ready') label = 'Start Wave 1';
     else if (g.wave >= C.MAX_WAVE) label = 'Final wave';
     else if (!g.waveInProgress && g.intermission > 0) label = `Wave ${g.wave + 1} in ${Math.ceil(g.intermission)}s  ▸`;
     else if (dis) label = `Wave ${g.wave} incoming…`;

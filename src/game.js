@@ -85,6 +85,7 @@ export class Game {
     this.towerMap = new Array(COLS * ROWS).fill(null);
     this.nextId = 1;
     this.baseHit = 0;
+    this.stress = false; // set by the stress lab: enemies loop the road and never cost lives
   }
 
   // ---------- path ----------
@@ -158,6 +159,17 @@ export class Game {
     this.enemies.push(e);
     return e;
   }
+
+  spawnProjectile(kind, x, y, target, speed, dmg, splash, tower) {
+    this.projectiles.push({
+      kind, x, y, px: x, py: y, target, tx: target.x, ty: target.y,
+      speed, dmg, splash, tower, alive: true,
+    });
+  }
+
+  get enemyCount() { return this.enemies.length; }
+  get projectileCount() { return this.projectiles.length; }
+  randomEnemy() { return this.enemies[(Math.random() * this.enemies.length) | 0]; }
 
   // ---------- towers ----------
   canPlace(c, r) {
@@ -297,6 +309,7 @@ export class Game {
       if (e.slowT > 0) { e.slowT -= dt; if (e.slowT <= 0) e.slow = 0; }
       if (e.hitT > 0) e.hitT -= dt;
       e.dist += e.speed * (1 - e.slow) * dt;
+      if (this.stress && e.dist >= this.pathLen) e.dist -= this.pathLen; // stress: loop, no life loss
       if (e.dist >= this.pathLen) {
         e.alive = false;
         this.lives -= e.def.lifeDmg;
@@ -359,12 +372,7 @@ export class Game {
         this.damage(target, st.dmg, true, t);
         this.effects.push({ kind: 'tracer', x1: mx, y1: my, x2: target.x, y2: target.y, color: t.def.color, life: 0.18, max: 0.18 });
       } else {
-        this.projectiles.push({
-          kind: fire, x: mx, y: my, px: mx, py: my,
-          target, tx: target.x, ty: target.y,
-          speed: st.pspeed * TILE, dmg: st.dmg,
-          splash: (st.splash || 0) * TILE, tower: t, alive: true,
-        });
+        this.spawnProjectile(fire, mx, my, target, st.pspeed * TILE, st.dmg, (st.splash || 0) * TILE, t);
       }
     }
   }

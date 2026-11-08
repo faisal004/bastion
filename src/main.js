@@ -3,6 +3,9 @@ import * as C from './config.js';
 import { Game } from './game.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
+import { Lab } from './lab.js';
+
+const VERSION = 'v0 baseline';
 
 const canvas = document.getElementById('game');
 const stage = document.getElementById('stage');
@@ -57,6 +60,18 @@ const actions = {
 };
 
 const ui = new UI(game, view, ctl, actions);
+const lab = new Lab({ game, ctl, ui, view, version: () => VERSION });
+
+{
+  const q = new URLSearchParams(location.search);
+  if (q.has('lab')) lab.toggle(true);
+  if (q.has('stress')) {
+    const [e = 5000, t = 100, p = 1000] = q.get('stress').split(',').map(Number);
+    lab.toggle(true);
+    lab.setSliders({ enemies: e, towers: t, projectiles: p });
+    lab.apply({ enemies: e, towers: t, projectiles: p });
+  }
+}
 
 // ---------- camera ----------
 function fitCamera() {
@@ -182,6 +197,7 @@ window.addEventListener('keydown', (e) => {
     case 't': actions.cycleMode(); break;
     case 'escape': view.placing = null; view.selected = null; break;
     case '`': perfEl.classList.toggle('hidden'); break;
+    case 'l': lab.toggle(); break;
     case '0': camTouched = false; fitCamera(); break;
   }
 });
@@ -230,6 +246,7 @@ let acc = 0;
 function frame(now) {
   let dt = (now - last) / 1000;
   last = now;
+  const rawDtMs = dt * 1000;
   if (dt > 0.25) dt = 0.25; // tab was in the background; don't fast-forward
 
   frameTimes[ftIdx] = dt * 1000;
@@ -241,6 +258,7 @@ function frame(now) {
   const t0 = performance.now();
   const running = ui.titleDismissed && !ctl.paused && game.state === 'playing';
   if (running) {
+    lab.topUp();
     acc += dt * ctl.speed;
     let steps = 0;
     while (acc >= C.STEP && steps < C.MAX_STEPS_PER_FRAME) {
@@ -258,6 +276,7 @@ function frame(now) {
   drawMs = drawMs * 0.9 + (t2 - t1) * 0.1;
 
   ui.update();
+  lab.frame(rawDtMs, t1 - t0, t2 - t1);
   perfTimer -= dt;
   if (perfTimer <= 0) { perfTimer = 0.25; perfReport(); }
   requestAnimationFrame(frame);
@@ -265,4 +284,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Exposed for the console / upcoming stress harness.
-window.bastion = { game, cam, view, ctl, renderer };
+window.bastion = { game, cam, view, ctl, renderer, lab };
