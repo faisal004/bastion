@@ -608,6 +608,9 @@ ${NOISE}`)
     const span = this.h / cam.zoom / T;
     const d = (span * Math.sin(PITCH)) / (2 * Math.tan((FOV * Math.PI) / 360)) * 0.92;
     this.camera.position.set(tx, d * Math.sin(PITCH), tz + d * Math.cos(PITCH) + 1.2);
+    // fog follows the camera distance, so zooming out shows the whole map instead of haze
+    this.scene.fog.near = d * 1.05 + 6;
+    this.scene.fog.far = d * 2.4 + 30;
     this.camera.lookAt(tx, 0, tz + 1.2);
     this.camera.updateMatrixWorld();
     // ground footprint of the view, for culling

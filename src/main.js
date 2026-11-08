@@ -85,7 +85,7 @@ const lab = new Lab({ game, ctl, ui, view, version: optsLabel });
 function fitCamera() {
   const w = renderer.w, h = renderer.h;
   const z = Math.min(w / C.WORLD_W, h / C.WORLD_H);
-  cam.minZoom = z * 0.9;
+  cam.minZoom = z * 0.45; // room to zoom out past the fit (the 3D view tilts, so it needs it)
   cam.maxZoom = Math.max(3, z * 4);
   cam.zoom = z;
   cam.x = (C.WORLD_W - w / z) / 2;
@@ -116,7 +116,7 @@ function onResize() {
   renderer.resize(r.width, r.height);
   if (!camTouched) fitCamera();
   else {
-    cam.minZoom = Math.min(renderer.w / C.WORLD_W, renderer.h / C.WORLD_H) * 0.9;
+    cam.minZoom = Math.min(renderer.w / C.WORLD_W, renderer.h / C.WORLD_H) * 0.45;
     clampCamera();
   }
 }
