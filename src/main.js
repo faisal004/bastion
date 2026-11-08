@@ -125,8 +125,13 @@ onResize();
 
 // ---------- input ----------
 function updateHover() {
-  const wx = cam.x + view.mx / cam.zoom, wy = cam.y + view.my / cam.zoom;
   if (!view.inside) { view.hoverCol = view.hoverRow = -1; return; }
+  let wx = cam.x + view.mx / cam.zoom, wy = cam.y + view.my / cam.zoom;
+  if (renderer.is3D) { // ray from the camera through the cursor onto the ground plane
+    const p = renderer.pick(view.mx, view.my);
+    if (!p) { view.hoverCol = view.hoverRow = -1; return; }
+    wx = p.x; wy = p.y;
+  }
   view.hoverCol = Math.floor(wx / C.TILE);
   view.hoverRow = Math.floor(wy / C.TILE);
 }
@@ -209,9 +214,17 @@ window.addEventListener('keydown', (e) => {
     case 'g': { // demo toggle: original renderer <-> best renderer
       const d = OPT_DEFS.find((x) => x.key === 'render');
       if (game.isProxy) { ui.toast('Renderer switching needs the main-thread sim (Stress Lab → Simulation thread)', 'warn'); break; }
-      opts.render = opts.render === d.best ? d.choices[0] : d.best;
+      opts.render = opts.render === 'naive' ? 'webgl' : 'naive';
       lab.syncOpts();
       ui.toast(`Renderer: ${d.names[opts.render]}`, 'warn');
+      break;
+    }
+    case 'v': { // 2D <-> 3D view
+      if (game.isProxy) { ui.toast('3D view needs the main-thread sim', 'warn'); break; }
+      opts.render = opts.render === '3d' ? 'webgl' : '3d';
+      lab.syncOpts();
+      ui.toast(opts.render === '3d' ? '3D view' : '2D view', 'warn');
+      updateHover();
       break;
     }
     case '0': camTouched = false; fitCamera(); break;
@@ -253,7 +266,8 @@ function perfReport() {
   perfEl.innerHTML =
     `<b>${(1000 / avg).toFixed(0)}</b> fps · p95 ${p95.toFixed(1)}ms · &gt;33ms ${((slow / n) * 100).toFixed(1)}%<br>` +
     `sim ${simMs.toFixed(2)}ms · draw ${drawMs.toFixed(2)}ms<br>` +
-    `enemies ${game.enemies.length} · towers ${game.towers.length} · proj ${game.projectiles.length} · fx ${game.effects.length}`;
+    `enemies ${game.enemyCount} · towers ${game.towers.length} · proj ${game.projectileCount} · fx ${game.effects.length}` +
+    (renderer.is3D ? `<br>3D · bloom ${opts.bloom === 'off' ? 'off' : renderer.r3d.bloomOn === false ? '<b style="color:#fbd38d">auto-off (load)</b>' : 'on'} · ${renderer.r3d.renderer.info.render.calls} draw calls` : '');
 }
 
 // ---------- the one frame loop ----------

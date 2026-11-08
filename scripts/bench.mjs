@@ -95,7 +95,42 @@ try {
   console.log(`  idle frame cadence: ${(cadence.reduce((a, b) => a + b, 0) / cadence.length).toFixed(1)} ms (${Math.round(1000 / (cadence.reduce((a, b) => a + b, 0) / cadence.length))} Hz)`);
 
   let result;
-  if (mode === 'phases') {
+  if (mode === 'clicktest') {
+    // Trusted mouse input (Input.dispatchMouseEvent) onto random buildable tiles in the current
+    // renderer; every click must place a tower on exactly the tile aimed at.
+    await evaluate(`(async () => { await new Promise(r => setTimeout(r, 800)); document.querySelector('[data-act=play]')?.click(); window.bastion.game.gold = 1e6; window.bastion.lab.toggle(false); })()`);
+    const targets = await evaluate(`(async () => {
+      const b = window.bastion, C = await import('/src/config.js');
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const rect = document.getElementById('game').getBoundingClientRect();
+      const r3 = b.renderer.is3D ? b.renderer.r3d : null;
+      const out = [];
+      for (let row = 0; row < C.ROWS; row++) for (let col = 0; col < C.COLS; col++) {
+        if (!b.game.canPlace(col, row)) continue;
+        let x, y;
+        if (r3) { const p = r3.project((col + 0.5) * C.TILE, 0, (row + 0.5) * C.TILE); x = p.x; y = p.y; }
+        else { x = ((col + 0.5) * C.TILE - b.cam.x) * b.cam.zoom; y = ((row + 0.5) * C.TILE - b.cam.y) * b.cam.zoom; }
+        if (x > 20 && y > 20 && x < rect.width - 20 && y < rect.height - 20) out.push([col, row, rect.left + x, rect.top + y]);
+      }
+      out.sort(() => Math.random() - 0.5);
+      return { mode: r3 ? '3d' : '2d', tiles: out.slice(0, ${Number(args.n || 40)}) };
+    })()`);
+    let ok = 0; const bad = [];
+    for (const [col, row, x, y] of targets.tiles) {
+      if (!(await evaluate('window.bastion.view.placing'))) { // '1' toggles, so only press it when not placing
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: '1', text: '1' });
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: '1' });
+      }
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+      const t = await evaluate(`(() => { const t = window.bastion.game.towerAt(${col}, ${row}); return t ? t.type : null; })()`);
+      if (t) ok++;
+      else bad.push([col, row, await evaluate(`(() => { const e = document.elementFromPoint(${x}, ${y}); return e ? (e.id || e.className || e.tagName) : null; })()`)]);
+    }
+    result = { mode: targets.mode, clicks: targets.tiles.length, ok, bad: bad.slice(0, 5) };
+    console.log(`  ${result.mode}: ${ok}/${result.clicks} clicks placed a tower on the intended tile${bad.length ? ' · misses: ' + JSON.stringify(result.bad) : ''}`);
+  } else if (mode === 'phases') {
     // Where does draw time go? Hold a load, then average the renderer's per-phase timers.
     result = await evaluate(`(async () => {
       const b = window.bastion;
@@ -103,12 +138,16 @@ try {
       ${args.zoom ? `b.cam.zoom = ${Number(args.zoom)}; b.cam.x = ${Number(args.camx || 300)}; b.cam.y = ${Number(args.camy || 200)};` : ''}
       await new Promise(r => setTimeout(r, 2000));
       const P = b.renderer.prof; for (const k in P) P[k] = 0;
+      const P3 = b.renderer.r3d && b.renderer.r3d.prof; if (P3) for (const k in P3) P3[k] = 0;
       await new Promise(r => setTimeout(r, 4000));
       const out = { frames: P.frames, effects: b.game.effects.length };
       for (const k of ['ground', 'towers', 'entities', 'effects']) out[k] = +(P[k] / P.frames).toFixed(2);
+      if (P3 && P3.frames) { out.fill3d = +(P3.fill / P3.frames).toFixed(2); out.render3d = +(P3.render / P3.frames).toFixed(2);
+        const info = b.renderer.r3d.renderer.info.render; out.calls = info.calls; }
       return out;
     })()`);
-    console.log(`  ${load.join('/')}: per frame — ground ${result.ground} ms · towers ${result.towers} ms · entities ${result.entities} ms · effects+overlay ${result.effects} ms (${result.frames} frames)`);
+    if (result.fill3d !== undefined) console.log(`  ${load.join('/')}: 3D per frame — instance fill ${result.fill3d} ms · three.js render ${result.render3d} ms (${result.frames} frames)`);
+    else console.log(`  ${load.join('/')}: per frame — ground ${result.ground} ms · towers ${result.towers} ms · entities ${result.entities} ms · effects+overlay ${result.effects} ms (${result.frames} frames)`);
   } else if (mode === 'shots') {
     // Same paused scene rendered once per choice of one switch: --opt-key render
     const key = args['opt-key'] || 'render';

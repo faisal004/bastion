@@ -5,9 +5,9 @@
 export const OPT_DEFS = [
   {
     key: 'render', label: 'Entity drawing',
-    choices: ['naive', 'paths', 'sprites', 'webgl'],
-    names: { naive: 'naive (path per entity)', paths: 'batched paths', sprites: 'sprite atlas', webgl: 'WebGL2 instanced' },
-    best: 'webgl',
+    choices: ['naive', 'paths', 'sprites', 'webgl', '3d'],
+    names: { naive: 'naive (path per entity)', paths: 'batched paths', sprites: 'sprite atlas', webgl: 'WebGL2 instanced', '3d': '3D (three.js)' },
+    best: '3d',
   },
   {
     key: 'sim', label: 'Simulation thread', reload: true,
@@ -45,6 +45,24 @@ export const OPT_DEFS = [
     key: 'cull', label: 'Off-screen culling',
     choices: ['off', 'on'],
     names: { off: 'draw everything', on: 'skip off-screen' },
+    best: 'on',
+  },
+  {
+    key: 'bloom', label: '3D bloom + grading',
+    choices: ['on', 'off'],
+    names: { on: 'on', off: 'off' },
+    best: 'on',
+  },
+  {
+    key: 'quality', label: '3D quality',
+    choices: ['fixed', 'adaptive'],
+    names: { fixed: 'fixed (always bloom)', adaptive: 'adaptive (drop bloom under load)' },
+    best: 'adaptive',
+  },
+  {
+    key: 'shadows', label: '3D sun shadows',
+    choices: ['on', 'off'],
+    names: { on: 'on', off: 'off' },
     best: 'on',
   },
   {

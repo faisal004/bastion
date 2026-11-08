@@ -5,6 +5,7 @@ import * as C from './config.js';
 import { opts } from './opts.js';
 import { addShape, dirIndex, paintEnemy, spriteHalf } from './shapes.js';
 import { GLRenderer } from './glrender.js';
+import { Renderer3D } from './render3d.js';
 
 const { TILE, COLS, ROWS, WORLD_W, WORLD_H } = C;
 const TAU = Math.PI * 2;
@@ -31,6 +32,10 @@ export class Renderer {
     this.glCanvas = layer('gl'); // inserted right after #game, so it sits below #fx
     this.fx = this.fxCanvas.getContext('2d');
     this.glr = new GLRenderer(this.glCanvas);
+    this.threeCanvas = layer('three'); // inserted right after #game: below the GL and effects layers
+    this.threeCanvas.style.display = 'none';
+    this.r3d = null; // created on first use
+    this.is3D = false;
     this.layersDirty = false;
     // cumulative per-phase JS draw time; read and reset by the profiler (bench.mjs --mode phases)
     this.prof = { frames: 0, ground: 0, towers: 0, entities: 0, effects: 0 };
@@ -52,9 +57,25 @@ export class Renderer {
     }
     this.fxCanvas.width = this.canvas.width; this.fxCanvas.height = this.canvas.height;
     this.glr.resize(this.canvas.width, this.canvas.height);
+    if (this.r3d) this.r3d.resize(w, h, this.dpr);
   }
 
   draw(game, cam, alpha, view, realDt) {
+    // 3D mode (three.js) draws the whole world itself; only floating text stays on the 2D fx layer.
+    if (opts.render === '3d' && !game.isProxy) {
+      if (!this.r3d) { this.r3d = new Renderer3D(this.threeCanvas); this.r3d.resize(this.w, this.h, this.dpr); }
+      if (this.r3d.ok) {
+        if (!this.is3D) { this.is3D = true; this.threeCanvas.style.display = 'block'; this.glr.clear(); }
+        this.t += realDt;
+        const t0 = performance.now();
+        this.r3d.draw(game, cam, alpha, view, realDt);
+        this.prof.entities += performance.now() - t0; this.prof.frames++;
+        this.drawText3D();
+        this.layersDirty = true;
+        return;
+      }
+    }
+    if (this.is3D) { this.is3D = false; this.threeCanvas.style.display = 'none'; }
     const ctx = this.ctx;
     this.t += realDt;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -112,6 +133,29 @@ export class Renderer {
     }
     this.drawEffects(game);
     this.drawOverlayWorld(game, view);
+  }
+
+  pick(mx, my) { return this.is3D ? this.r3d.pick(mx, my) : null; }
+
+  drawText3D() {
+    const fx = this.fx, r = this.r3d;
+    fx.setTransform(1, 0, 0, 1, 0, 0);
+    fx.clearRect(0, 0, this.fxCanvas.width, this.fxCanvas.height);
+    if (!r.textQueue.length) return;
+    fx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    fx.font = 'bold 14px system-ui, sans-serif';
+    fx.textAlign = 'center';
+    for (const f of r.textQueue) {
+      const k = f.life / f.max;
+      const p = r.project(f.x, 1.1 + (1 - k) * 0.9, f.y);
+      if (p.behind) continue;
+      fx.globalAlpha = Math.max(0, k);
+      fx.fillStyle = 'rgba(0,0,0,0.6)';
+      fx.fillText(f.text, p.x + 1, p.y + 1);
+      fx.fillStyle = f.color;
+      fx.fillText(f.text, p.x, p.y);
+    }
+    fx.globalAlpha = 1;
   }
 
   drawGround(game, view) {

@@ -1,6 +1,7 @@
 # Bastion — Browser Tower Defense
 
-A tower defense game that runs in the browser with no dependencies and no build step.
+A 3D tower defense game that runs in the browser with no build step and no network access.
+The only third-party code is three.js, vendored in the repo.
 You hold a fortress against 50 waves of enemies by placing, upgrading and selling
 towers along a winding road.
 
@@ -62,6 +63,7 @@ New enemy types arrive as the waves go on, so the game gets steadily harder.
 | `` ` `` | Toggle the performance overlay |
 | `L` | Open the Stress Lab |
 | `G` | Toggle renderer: original Canvas 2D ↔ WebGL2 (for before/after demos) |
+| `V` | Toggle 2D ↔ 3D view |
 | `Esc` | Cancel placement / deselect |
 
 ---
@@ -75,6 +77,7 @@ src/
   config.js               all game data: map, towers, enemies, wave generator, balance curves
   game.js                 simulation (pure state + fixed-step update); knows nothing about the DOM
   render.js               layered renderer: Canvas 2D ground/towers/effects + mode switch for entities
+  render3d.js             3D renderer (three.js): instanced meshes, custom shaders, bloom, adaptive quality
   glrender.js             WebGL2 instanced entity renderer (one draw call) + sprite atlas
   shapes.js               enemy shape painting shared by every renderer
   opts.js                 runtime optimization switches (?baseline, ?opt=key:value)
@@ -87,7 +90,8 @@ src/
   main.js                 bootstrap, the single frame loop, input, camera, perf meter
   bot.js                  headless autoplayer, used for balance tuning and long-run tests
   lab.js                  Stress Lab: fixed-load harness, frame-time recorder, breaking-point ramp
-scripts/bench.mjs         zero-dependency Chrome/DevTools benchmark runner
+scripts/bench.mjs         zero-dependency Chrome/DevTools benchmark runner (ramp, bench, phases, shots, clicktest)
+vendor/three/             three.js r186.1, only the files the game imports (core + bloom post-processing)
 bench/results/            raw JSON from benchmark runs
 ```
 
@@ -118,6 +122,32 @@ This keeps the simulation easy to measure on its own, to run headless, and to op
 separately from drawing.
 
 ## Rendering approach
+
+**Default: 3D with three.js** ([src/render3d.js](src/render3d.js)).
+- three.js r186.1 is vendored in `vendor/three` (sha512-verified from npm), mapped with an import
+  map, and nothing is fetched at runtime.
+- The simulation is unchanged. The 3D view is another renderer over the same game state.
+- **Camera:** a tilted perspective camera follows the same pan/zoom as the 2D camera. Clicks are
+  ray-cast onto the ground plane to find the tile.
+- **Instancing as in 2D:** every high-count thing is one `InstancedMesh`, filled by writing
+  straight into its typed arrays. That covers enemies (one mesh per type), blob shadows, billboard
+  health bars, projectiles, tower bases, turrets, level pips, muzzle flashes, rings and tracers.
+- **Culling:** off-screen enemies and projectiles are skipped using the camera's ground footprint.
+- **Custom shaders, for the look:**
+  - procedural terrain: fbm grass, dry patches, a worn dirt road with a dark lip, all from a
+    distance-to-path field; a placement grid and a hover tile
+  - wind-blown grass blades (vertex shader)
+  - fireflies (vertex shader)
+  - a swirling spawn portal
+  - additive glow rings for frost pulses and explosions
+  - GPU-animated death-burst particles
+  - a grading pass: vignette, split toning and saturation
+- **Lighting:** sun with soft shadows, sky/ground hemisphere light, and a pulsing fortress core
+  with a point light that flares red when the fortress is hit.
+- **Adaptive quality:** bloom (`UnrealBloomPass`) drops out automatically when too many frames miss
+  the 45 fps budget, and comes back when the load falls.
+
+**2D modes** (still available: `V` toggles 2D/3D, and the Stress Lab has every mode):
 
 Three stacked canvases share one world-space camera (zoom and pan) and a backing store
 that accounts for device pixel ratio:
@@ -191,6 +221,7 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
 | 4 | Viewport culling for enemies, projectiles and towers | `cull`: off / **on** |
 | 4 | Static ground cached in an offscreen layer | `bg`: redraw / **cached** |
 | 5 | Simulation in a Web Worker: zero-copy snapshots, `GameProxy` (measured slower; not default) | `sim`: **main** / worker |
+| 6 | 3D renderer (three.js) with instanced fills, culling, GPU particles, adaptive bloom | `render`: … / **3d**, `quality`, `bloom`, `shadows` |
 
 Every optimization is a runtime switch, so before and after run on the same build:
 - `?baseline` starts with every switch at its original setting.

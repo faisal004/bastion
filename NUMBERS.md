@@ -349,3 +349,61 @@ sell (70% refund, tile freed), and the wave-2 auto-start.
 justify the extra latency (one frame) and complexity as the default. So `sim: main` stays the
 default, and `sim: worker` remains a switch in the Stress Lab (changing it reloads the page with
 the same load).
+
+
+## 6 · 3D renderer (three.js) — cost of the new look
+
+The default view is now 3D, drawn with **three.js r186.1** (vendored in `vendor/three`, loaded
+through an import map, no network at runtime). The 2D renderers above remain as switchable modes:
+`render: naive | paths | sprites | webgl | 3d`, `V` toggles 2D/3D, and `G` still toggles naive ↔ WebGL.
+
+**Built so it scales like the 2D WebGL renderer:**
+- Every high-count thing is one `InstancedMesh`: enemies (one per type), blob shadows, health bars
+  (billboards), projectiles, tower parts, rings and tracers.
+- The fill loop writes matrices and colors straight into the typed arrays with explicit update
+  ranges. There are no `Object3D`s or `setMatrixAt` calls per entity.
+- Off-screen enemies and projectiles are culled against the ground footprint of the camera
+  frustum, computed from 4 corner rays.
+- Death bursts are GPU particles in a 32k ring buffer. The CPU writes 7 particles once per death,
+  and the vertex shader animates them.
+- All shaders are compiled at startup. Instance buffers are pre-sized and double when they grow.
+- Parsed effect colors are cached, because parsing a CSS color string per effect per frame caused GC hitches.
+
+**Results:**
+
+| Setting | Last passing load | Breaks at | Notes |
+|---|---|---|---|
+| native (M5) | **40,000 / 600 / 8,000** (whole ramp) | — | 59.5 fps @95% at 40k; JS draw ≈ 3 ms |
+| 4× CPU, bloom fixed on | 7,500 / 150 / 1,500 (4 of 4 runs) | 10,000 | |
+| 4× CPU, adaptive bloom (default) | 7,500–10,000 (varies by run) | 10,000–15,000 | bloom drops automatically when > 6% of recent frames are slow |
+| 4× CPU, bloom off | 15,000 / 300 / 3,000 | 20,000 | |
+
+The brief's 5k / 100 / 1k passes in every 3D run, native and 4×.
+
+**What it costs and why** (per frame at 10k / 200 / 2k, 4× CPU, `bench.mjs --mode phases`):
+- Bloom is the main 3D cost under throttling: about a dozen extra full-screen passes.
+  - bloom on: 154–216 of 240 frames delivered
+  - bloom off: 240 of 240
+  - Shadows made no measurable difference: casters are a few instanced meshes.
+- JS timings under DevTools throttling are noisy, because it throttles by pausing the thread and
+  any span can absorb a pause. Frame counts and the ramp are the reliable signals.
+
+**Measurement hygiene found in this step:**
+- Rendering straight to the screen when bloom was off needed different shader variants (in-material
+  tone mapping / sRGB). Every adaptive on/off switch therefore recompiled every shader and stalled
+  a frame. Fix: always render through the composer and just disable the bloom pass.
+- An average frame time hid the misses: about 18.7 ms average at 10k, but 1 frame in 20 over
+  33 ms. The adaptive trigger now counts slow frames over the last second, which is what the
+  95%-of-frames criterion measures.
+- Back-to-back runs varied a lot until the app's own preview pane (left running a 3,000-enemy
+  stress page) was parked on a static page. Each 3D configuration above was run at least twice,
+  alternating.
+
+**Correctness:**
+- `bench.mjs --mode clicktest` sends trusted mouse input to random buildable tiles. **60/60** clicks
+  place a tower on the intended tile, in both 3D (ray picking onto the ground plane) and 2D.
+- Every switch combination (1,280, including 3D with bloom/shadows/quality on and off) renders a
+  frame without errors.
+- The 3D instance counts match the live game exactly.
+
+Screenshots: [docs/3d-overview.png](docs/3d-overview.png), [docs/3d-closeup.png](docs/3d-closeup.png).

@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bastion — Tower Defense</title>
   <link rel="stylesheet" href="style.css">
+  <!-- three.js is vendored (vendor/three, r186.1): no network access at runtime -->
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
 </head>
 <body>
   <div id="app">

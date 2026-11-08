@@ -1,0 +1,1 @@
+three.js r186.1 (npm three@0.186.1, sha512 verified). Only the files the game imports are vendored; nothing is fetched at runtime.
