@@ -88,7 +88,21 @@ try {
   console.log(`  idle frame cadence: ${(cadence.reduce((a, b) => a + b, 0) / cadence.length).toFixed(1)} ms (${Math.round(1000 / (cadence.reduce((a, b) => a + b, 0) / cadence.length))} Hz)`);
 
   let result;
-  if (mode === 'shots') {
+  if (mode === 'phases') {
+    // Where does draw time go? Hold a load, then average the renderer's per-phase timers.
+    result = await evaluate(`(async () => {
+      const b = window.bastion;
+      b.lab.setSliders({ enemies: ${load[0]}, towers: ${load[1]}, projectiles: ${load[2]} }); b.lab.apply(b.lab.cfg);
+      ${args.zoom ? `b.cam.zoom = ${Number(args.zoom)}; b.cam.x = ${Number(args.camx || 300)}; b.cam.y = ${Number(args.camy || 200)};` : ''}
+      await new Promise(r => setTimeout(r, 2000));
+      const P = b.renderer.prof; for (const k in P) P[k] = 0;
+      await new Promise(r => setTimeout(r, 4000));
+      const out = { frames: P.frames, effects: b.game.effects.length };
+      for (const k of ['ground', 'towers', 'entities', 'effects']) out[k] = +(P[k] / P.frames).toFixed(2);
+      return out;
+    })()`);
+    console.log(`  ${load.join('/')}: per frame — ground ${result.ground} ms · towers ${result.towers} ms · entities ${result.entities} ms · effects+overlay ${result.effects} ms (${result.frames} frames)`);
+  } else if (mode === 'shots') {
     // Same paused scene rendered once per choice of one switch: --opt-key render
     const key = args['opt-key'] || 'render';
     const choices = await evaluate(`(async () => {

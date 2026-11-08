@@ -6,12 +6,23 @@
 // Sprites come from a texture atlas painted with the same code as the Canvas 2D renderer.
 import * as C from './config.js';
 import { DIRS, dirIndex, paintEnemy, spriteHalf } from './shapes.js';
+import { opts } from './opts.js';
 
 const TILE = C.TILE;
 const TAU = Math.PI * 2;
 const STRIDE = 9; // floats per instance
 const LAYER_ORDER = ['swarm', 'runner', 'grunt', 'tank', 'boss', 'flyer'];
 const ATLAS = 2048;
+const NL = LAYER_ORDER.length;
+LAYER_ORDER.forEach((t, i) => { C.ENEMIES[t].layer = i; }); // numeric layer, so the hot loop never compares strings
+const CULL_PAD = 64; // world units: largest sprite half-extent + health bar offset
+
+function write(f, u, o, x, y, w, h, e, color) {
+  o *= STRIDE;
+  f[o] = x; f[o + 1] = y; f[o + 2] = w; f[o + 3] = h;
+  f[o + 4] = e.u0; f[o + 5] = e.v0; f[o + 6] = e.u1; f[o + 7] = e.v1;
+  u[o + 8] = color;
+}
 
 const VS = `#version 300 es
 layout(location=0) in vec2 a_corner;
@@ -100,6 +111,10 @@ export class GLRenderer {
     this.capacity = 0;
     this.grow(16384);
     this.buckets = Object.fromEntries(LAYER_ORDER.map((k) => [k, []]));
+    // counting-sort fill state (reused every frame)
+    this.counts = new Int32Array(NL * 2);
+    this.offs = new Int32Array(NL * 2);
+    this.ix = new Float32Array(0); this.iy = new Float32Array(0); this.vis = new Uint8Array(0);
     this.ok = true;
   }
 
@@ -164,6 +179,11 @@ export class GLRenderer {
     });
     this.entries = entries;
     this.spriteKeys = {};
+    this.ringByLayer = LAYER_ORDER.map((t) => entries.get('ring:' + t));
+    this.spriteBySlot = [];
+    for (let hit = 0; hit < 2; hit++) for (const type of LAYER_ORDER) {
+      this.spriteBySlot[hit * NL + C.ENEMIES[type].layer] = [0, 1, 2, 3].map((d) => entries.get(type + (hit ? '!' : '') + d) || entries.get(type + (hit ? '!' : '') + '0'));
+    }
     for (const type of LAYER_ORDER) {
       this.spriteKeys[type] = [0, 1, 2, 3].map((d) => entries.get(type + d) || entries.get(type + '0'));
       this.spriteKeys[type + '!'] = [0, 1, 2, 3].map((d) => entries.get(type + '!' + d) || entries.get(type + '!0'));
@@ -181,11 +201,77 @@ export class GLRenderer {
 
   // ---------- per frame ----------
   draw(game, cam, scale, alpha) {
-    const gl = this.gl;
     this.ensureAtlas(scale);
-    const enemies = game.enemies, projectiles = game.projectiles;
-    const need = enemies.length * 4 + projectiles.length + 16;
+    const need = game.enemies.length * 4 + game.projectiles.length + 16;
     if (need > this.capacity) this.grow(Math.ceil(need * 1.5));
+    const n = opts.glfill === 'counting' ? this.fillCounting(game, cam, scale, alpha) : this.fillBuckets(game, alpha);
+    this.instances = n;
+    return this.submit(n, cam, scale);
+  }
+
+  // One pass counts visible enemies per layer slot (and rings / bars), a prefix sum turns counts
+  // into offsets, a second pass writes every instance straight into its final slot.
+  // Same output order as fillBuckets, but no arrays, strings or Map lookups per frame.
+  fillCounting(game, cam, scale, alpha) {
+    const enemies = game.enemies, projectiles = game.projectiles, n = enemies.length;
+    if (this.vis.length < n) {
+      const cap = Math.ceil(n * 1.5);
+      this.ix = new Float32Array(cap); this.iy = new Float32Array(cap); this.vis = new Uint8Array(cap);
+    }
+    const ix = this.ix, iy = this.iy, vis = this.vis, counts = this.counts, offs = this.offs;
+    const f = this.f32, u = this.u32;
+    counts.fill(0);
+    const cull = opts.cull === 'on';
+    const vx0 = cam.x - CULL_PAD, vy0 = cam.y - CULL_PAD;
+    const vx1 = cam.x + this.canvas.width / scale + CULL_PAD, vy1 = cam.y + this.canvas.height / scale + CULL_PAD;
+    let rings = 0, bars = 0;
+    for (let i = 0; i < n; i++) {
+      const e = enemies[i];
+      const x = e.px + (e.x - e.px) * alpha, y = e.py + (e.y - e.py) * alpha;
+      if (cull && (x < vx0 || x > vx1 || y < vy0 || y > vy1)) { vis[i] = 0; continue; }
+      ix[i] = x; iy[i] = y;
+      const slot = e.def.layer + (e.hitT > 0 ? NL : 0);
+      vis[i] = slot + 1;
+      counts[slot]++;
+      if (e.slowT > 0) rings++;
+      if (e.hp < e.maxHp) bars++;
+    }
+    let acc = 0;
+    for (let k = 0; k < counts.length; k++) { offs[k] = acc; acc += counts[k]; }
+    let ringAt = acc, barAt = acc + rings, projAt = barAt + bars * 2;
+    const white = this.entries.get('white'), rings_ = this.ringByLayer, sprites = this.spriteBySlot;
+    for (let i = 0; i < n; i++) {
+      const v = vis[i];
+      if (v === 0) continue;
+      const e = enemies[i], x = ix[i], y = iy[i], slot = v - 1;
+      const s = sprites[slot][dirIndex(e)];
+      write(f, u, offs[slot]++, x - s.h, y - s.h, s.h * 2, s.h * 2, s, WHITE);
+      if (e.slowT > 0) {
+        const r = rings_[e.def.layer];
+        write(f, u, ringAt++, x - r.h, y - r.h, r.h * 2, r.h * 2, r, WHITE);
+      }
+      if (e.hp < e.maxHp) {
+        const rad = e.def.radius * TILE, w = Math.max(14, rad * 2.2);
+        const fr = Math.max(0, e.hp / e.maxHp);
+        write(f, u, barAt, x - w / 2 - 1, y - rad - 9, w + 2, 5, white, BAR_BG);
+        write(f, u, barAt + 1, x - w / 2, y - rad - 8, w * fr, 3, white, BAR_COLORS[fr > 0.5 ? 0 : fr > 0.25 ? 1 : 2]);
+        barAt += 2;
+      }
+    }
+    const bullet = this.entries.get('bullet'), shell = this.entries.get('shell');
+    for (let i = 0; i < projectiles.length; i++) {
+      const p = projectiles[i];
+      const x = p.px + (p.x - p.px) * alpha, y = p.py + (p.y - p.py) * alpha;
+      if (cull && (x < vx0 || x > vx1 || y < vy0 || y > vy1)) continue;
+      const s = p.kind === 'shell' ? shell : bullet;
+      write(f, u, projAt++, x - s.h, y - s.h, s.h * 2, s.h * 2, s, WHITE);
+    }
+    return projAt;
+  }
+
+  // Original fill (kept as the "before" for the glfill switch).
+  fillBuckets(game, alpha) {
+    const enemies = game.enemies, projectiles = game.projectiles;
     const f = this.f32, u = this.u32;
     let n = 0;
     const put = (x, y, w, h, e, color) => {
@@ -241,7 +327,11 @@ export class GLRenderer {
       const x = p.px + (p.x - p.px) * alpha, y = p.py + (p.y - p.py) * alpha;
       put(x - s.h, y - s.h, s.h * 2, s.h * 2, s, WHITE);
     }
+    return n;
+  }
 
+  submit(n, cam, scale) {
+    const gl = this.gl;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -256,7 +346,7 @@ export class GLRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.ibuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, f, 0, n * STRIDE);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.f32, 0, n * STRIDE);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
     gl.bindVertexArray(null);
     return n;

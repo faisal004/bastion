@@ -147,6 +147,7 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
 | + WebGL2 instanced renderer | 15,000 / 300 / 3,000 |
 | + spatial hash grid | 20,000 / 400 / 4,000 (native: none up to 40,000 / 600 / 8,000) |
 | + allocation-free simulation | 30,000 / 600 / 6,000 (native: none up to 40,000 / 600 / 8,000) |
+| + counting-sort GPU fill, culling, cached ground | unchanged at 4× (draw −21–45%); last pass 20,000 / 400 / 4,000 |
 
 ### Bottlenecks found
 1. **Per-call Canvas 2D overhead (fixed).** At the target load, drawing cost 10 ms per frame
@@ -162,8 +163,15 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
    - Hidden allocations (a reallocating scratch array, `Math.hypot`, `for…of` iterators) plus
      `filter()` and new objects caused about one GC every 4 steps at 40k.
    - Now: cached segments, pools, in-place compaction. 6.6 → 3.1 ms per step, 92 → 11 GCs.
-4. **Canvas 2D layers (next).** The ground is redrawn per tile every frame, and towers and death
-   effects are drawn one by one. At 20k+ this is most of the remaining draw time.
+4. **WebGL buffer fill (fixed).**
+   - The assumption was that the 2D layers cost the most. Per-phase timers showed the WebGL
+     instance fill was 6.7 of ~9 ms at 20k: bucket arrays regrown every frame, 4 passes,
+     string keys.
+   - A counting-sort fill halved it. Culling makes zoomed-in draw cost follow what is on screen.
+     The static ground is cached.
+5. **Sim + draw on one thread (open).** At 25k under 4× throttling, one sim step (~8 ms) plus
+   draw (~9.6 ms) exceeds 16.7 ms. The next lever is running the simulation in a Web Worker,
+   in parallel with drawing.
 
 ### Optimizations
 | # | What | Switch |
@@ -172,6 +180,9 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
 | 2 | Spatial hash grid: counting-sort rebuild per step, typed arrays, no allocation | `grid`: off / **on** |
 | 3 | Cached path segment per enemy | `path`: scan / **cached** |
 | 3 | Object pools + in-place compaction (fixed object shapes, id-checked targets) | `alloc`: filter / **pooled** |
+| 4 | Counting-sort WebGL instance fill (2 passes, zero garbage) | `glfill`: buckets / **counting** |
+| 4 | Viewport culling for enemies, projectiles and towers | `cull`: off / **on** |
+| 4 | Static ground cached in an offscreen layer | `bg`: redraw / **cached** |
 
 Every optimization is a runtime switch, so before and after run on the same build:
 - `?baseline` starts with every switch at its original setting.
@@ -200,6 +211,7 @@ node server.js &
 node scripts/bench.mjs --headed            # ramp in a real Chrome window
 node scripts/bench.mjs --headed --cpu 4    # same, with DevTools 4× CPU throttling
 node scripts/bench.mjs --headed --mode bench --load 5000,100,1000
+node scripts/bench.mjs --headed --cpu 4 --mode phases --load 20000,400,4000   # draw time per phase
 node scripts/check-grid.mjs                # grid == full scan, plus a full-game check
 node scripts/check-sim.mjs                 # optimized sim stays bit-identical to the original
 node --expose-gc scripts/check-memory.mjs  # heap across a full 50-wave game
@@ -223,7 +235,6 @@ Roadmap:
    - ✅ spatial hash grid for target, splash and frost queries
    - ✅ allocation-free simulation: object pools, in-place compaction, cached path segments
    - ✅ instanced WebGL2 rendering (batched paths and sprite atlases were tried first, and lost)
-   - viewport culling
-   - a cached static background layer
+   - ✅ counting-sort WebGL fill, viewport culling, cached static ground
 4. **Measurement write-up** — a methodology section, plus `NUMBERS.md` with a
    before/after table for each optimization.

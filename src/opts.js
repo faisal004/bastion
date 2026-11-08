@@ -27,6 +27,24 @@ export const OPT_DEFS = [
     names: { filter: 'filter() + new objects', pooled: 'pools + in-place compaction' },
     best: 'pooled',
   },
+  {
+    key: 'glfill', label: 'GPU buffer fill',
+    choices: ['buckets', 'counting'],
+    names: { buckets: 'bucket arrays, 4 passes', counting: 'counting sort, 2 passes' },
+    best: 'counting',
+  },
+  {
+    key: 'cull', label: 'Off-screen culling',
+    choices: ['off', 'on'],
+    names: { off: 'draw everything', on: 'skip off-screen' },
+    best: 'on',
+  },
+  {
+    key: 'bg', label: 'Static ground',
+    choices: ['redraw', 'cached'],
+    names: { redraw: 'redraw every frame', cached: 'cached layer' },
+    best: 'cached',
+  },
 ];
 
 export const opts = {};

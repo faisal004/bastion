@@ -32,6 +32,8 @@ export class Renderer {
     this.fx = this.fxCanvas.getContext('2d');
     this.glr = new GLRenderer(this.glCanvas);
     this.layersDirty = false;
+    // cumulative per-phase JS draw time; read and reset by the profiler (bench.mjs --mode phases)
+    this.prof = { frames: 0, ground: 0, towers: 0, entities: 0, effects: 0 };
   }
 
   get glActive() { return opts.render === 'webgl' && this.glr.ok; }
@@ -61,13 +63,26 @@ export class Renderer {
     const s = cam.zoom * this.dpr;
     ctx.setTransform(s, 0, 0, s, -cam.x * s, -cam.y * s);
 
+    const P = this.prof, now = performance.now.bind(performance);
+    let t0 = now();
     this.drawGround(game, view);
     this.drawBase(game);
+    let t1 = now(); P.ground += t1 - t0; t0 = t1;
     this.scale = s;
-    for (const t of game.towers) this.drawTower(t, game, t === view.selected);
+    const cull = opts.cull === 'on';
+    const vx0 = cam.x - TILE, vy0 = cam.y - TILE, vx1 = cam.x + this.w / cam.zoom + TILE, vy1 = cam.y + this.h / cam.zoom + TILE;
+    const towers = game.towers;
+    for (let i = 0; i < towers.length; i++) {
+      const t = towers[i];
+      if (cull && (t.x < vx0 || t.x > vx1 || t.y < vy0 || t.y > vy1)) continue;
+      this.drawTower(t, game, t === view.selected);
+    }
+    t1 = now(); P.towers += t1 - t0; t0 = t1;
+    P.frames++;
 
     if (this.glActive) {
       this.glr.draw(game, cam, s, alpha);
+      t1 = now(); P.entities += t1 - t0; t0 = t1;
       // effects + overlay must sit above the GL entities, so they go on the top 2D layer
       const fx = this.fx;
       fx.setTransform(1, 0, 0, 1, 0, 0);
@@ -77,6 +92,7 @@ export class Renderer {
       this.drawEffects(game);
       this.drawOverlayWorld(game, view);
       this.ctx = ctx;
+      P.effects += now() - t0;
       this.layersDirty = true;
       return;
     }
@@ -99,6 +115,26 @@ export class Renderer {
 
   drawGround(game, view) {
     const ctx = this.ctx;
+    // The ground, road, grass and rocks never change during a game: paint them once into an
+    // offscreen layer and blit it. Above 2.5x scale fall back to direct painting so it stays sharp.
+    if (opts.bg === 'cached' && this.scale <= 2.5) {
+      const q = Math.min(2.5, Math.max(1, Math.ceil(this.scale * 2) / 2));
+      if (!this.bgCanvas || this.bgQ !== q || this.bgGame !== game.baseGrid) {
+        this.bgQ = q; this.bgGame = game.baseGrid;
+        const w = Math.ceil(WORLD_W * q), h = Math.ceil(WORLD_H * q);
+        this.bgCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
+        const g = this.bgCanvas.getContext('2d');
+        g.scale(q, q);
+        this.paintStaticGround(g, game);
+      }
+      ctx.drawImage(this.bgCanvas, 0, 0, WORLD_W, WORLD_H);
+    } else {
+      this.paintStaticGround(ctx, game);
+    }
+    this.drawGroundDynamic(game, view);
+  }
+
+  paintStaticGround(ctx, game) {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const v = game.grid[r * COLS + c];
@@ -145,6 +181,10 @@ export class Renderer {
       ctx.beginPath(); ctx.arc(x - rr * 0.2, y - rr * 0.25, rr * 0.35, 0, TAU); ctx.fill();
     }
 
+  }
+
+  drawGroundDynamic(game, view) {
+    const ctx = this.ctx;
     if (view.placing) {
       ctx.strokeStyle = 'rgba(255,255,255,0.05)';
       ctx.lineWidth = 1;

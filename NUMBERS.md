@@ -68,6 +68,7 @@ in the same session.
 | 1 | WebGL2 instanced entity renderer | 7,500 → **15,000** enemies | 15,000 → **30,000** enemies | 10.11 → **2.47** |
 | 2 | Spatial hash grid for range queries | 15,000 → **20,000** enemies | 30,000 → **> 40,000** (passes the whole ramp) | sim at 30k: 395 → **23** ms/frame |
 | 3 | Allocation-free sim: cached path segment, pools, in-place compaction, no hidden allocations | 20,000 → **30,000** enemies | > 40,000 (frame work at 40k: 8.3 → 7.0 ms) | sim per step at 40k (Node): 6.60 → **3.07** ms; GCs 92 → 11 |
+| 4 | Counting-sort GPU fill, off-screen culling, cached ground | 30,000 → 30,000 (**unchanged**; limit is now sim + frame budget) | > 40,000 | draw at 20k: 9.06 → **5.93** ms; zoomed 2.5×: entities 3.4 → 1.9 ms, towers 1.15 → 0.32 ms |
 
 The table's last column changes with each row, because each optimization targets a different bottleneck.
 
@@ -212,3 +213,76 @@ the Canvas 2D layers:
 - the ground is redrawn tile by tile every frame;
 - ~400 towers, each drawn with its own calls;
 - thousands of short-lived death effects, each with its own `globalAlpha` and `arc`.
+
+
+### 4 · Draw path: counting-sort GPU fill, culling, cached ground
+
+**Measured first.** I had assumed the 2D layers (ground, towers, effects) were the remaining draw
+cost. The renderer's per-phase timers (`bench.mjs --mode phases`) said otherwise.
+At 20k / 400 / 4k, 4× CPU, per frame:
+
+| Phase | ms |
+|---|---:|
+| ground | 0.40 |
+| towers | 1.41 |
+| **WebGL instance fill** | **6.73** |
+| effects + overlay | 0.45 |
+
+The instance fill had the same garbage pattern fixed in the simulation:
+- bucket arrays cleared with `length = 0` and regrown every frame;
+- four passes over every enemy;
+- a string key and a `Map` lookup per slowed enemy.
+
+**Changes (switches):**
+- **`glfill`: buckets → counting.**
+  - Pass 1 interpolates each enemy once and counts it into a layer slot (type × hit flash).
+    It also counts slow rings and health bars.
+  - A prefix sum turns the counts into offsets.
+  - Pass 2 writes every instance straight into its final slot of the `Float32Array`.
+  - No arrays, strings or Map lookups per frame. The output order is identical.
+- **`cull`: off → on.** Enemies, projectiles and towers outside the camera rect (plus a 64 px margin) are skipped.
+- **`bg`: redraw → cached.**
+  - Tiles, road, grass and rocks are painted once into an offscreen layer and blitted.
+  - The layer is repainted only when the zoom crosses a 0.5× step.
+  - Above 2.5× zoom it paints directly, so it stays sharp.
+
+**Correctness.**
+- Pixel diff (`bench.mjs --mode shots`, 4.5 M pixels): `glfill` counting vs buckets differs in
+  **0** pixels. Cached vs redrawn ground differs in 0.02% (resampling at road edges).
+- All 256 combinations of every switch render a frame without errors, and every WebGL
+  combination draws its full instance set.
+- That sweep was added after a bug got through: a stale variable in `submit()` broke every
+  WebGL frame after the first. Both the first pixel diff and the first timing run silently
+  measured a dead renderer.
+
+**Per-phase draw time** (4× CPU, ms per frame):
+
+| Configuration | ground | towers | entities | effects |
+|---|---:|---:|---:|---:|
+| 20k, before (buckets, no cull, redraw) | 0.40 | 1.41 | 6.73 | 0.45 |
+| 20k, + `glfill: counting` | 0.40 | 1.41 | **3.44** | 0.49 |
+| 20k, + `bg: cached` | **0.10** | 1.43 | 3.55 | 0.54 |
+| 20k at 2.5× zoom, `cull: off` | 0.34 | 1.15 | 3.40 | 0.40 |
+| 20k at 2.5× zoom, `cull: on` | 0.29 | **0.32** | **1.90** | 0.42 |
+
+With culling on, draw cost follows what is on screen. The one exception is a cheap bounds test
+per enemy (pass 1), so off-screen enemies are never written to the GPU buffer.
+
+**Ramp, 4× CPU** (`bench/results/opt4-*.json`):
+
+| Enemies | Towers | Projectiles | before: fps@95% · sim · draw | after: fps@95% · sim · draw |
+|---:|---:|---:|---|---|
+| 10,000 | 200 | 2,000 | 57.1 · 1.27 · 4.40 | 56.8 · 1.20 · **2.25** |
+| 15,000 | 300 | 3,000 | 57.1 · 2.96 · 6.93 | 56.8 · 3.66 · **4.43** |
+| 20,000 | 400 | 4,000 | 56.8 · 4.46 · 9.06 | 56.8 · 5.12 · **5.93** |
+| 25,000 | 500 | 5,000 | 29.2 · 7.95 · 12.14 FAIL | 20.0 · 11.50 · **9.57** FAIL |
+| 30,000 | 600 | 6,000 | 19.9 · 12.84 · 13.59 FAIL | 11.8 · 21.96 · **10.08** FAIL |
+
+**The breaking point did not move** (last pass 20k, first fail 25k–30k), even though draw time
+fell 21–45%:
+- At 25k under 4× throttling, one sim step (~8 ms) plus draw (~9.6 ms) is still over the 16.7 ms budget.
+- Once a frame is late, the fixed-timestep loop runs two sim steps the next frame. That is why
+  "sim" past the breaking point is noisy and can look *higher* after.
+
+To go further, the simulation has to stop sharing the main thread with drawing (a Web Worker),
+or one step has to get cheaper again.
