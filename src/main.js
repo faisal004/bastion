@@ -3,6 +3,7 @@ import * as C from './config.js';
 import { Game } from './game.js';
 import { Renderer } from './render.js';
 import { UI } from './ui.js';
+import { Audio } from './audio.js';
 import { Lab } from './lab.js';
 import { initOpts, optsLabel, opts, OPT_DEFS } from './opts.js';
 import { GameProxy } from './proxy.js';
@@ -24,6 +25,7 @@ renderer.forceGL = useWorker;
 const cam = { x: 0, y: 0, zoom: 1, minZoom: 0.5, maxZoom: 3 };
 const view = { placing: null, selected: null, hoverCol: -1, hoverRow: -1, mx: 0, my: 0, inside: false };
 const ctl = { paused: false, speed: 1, restartArmed: false };
+const audio = new Audio(document.getElementById('btn-sound'));
 const SPEEDS = [1, 2, 4];
 
 // ---------- actions ----------
@@ -318,6 +320,7 @@ function frame(now) {
   simMs = simMs * 0.9 + (t1 - t0) * 0.1;
   drawMs = drawMs * 0.9 + (t2 - t1) * 0.1;
 
+  audio.update(game, ctl.paused || !ui.titleDismissed);
   ui.update();
   lab.frame(rawDtMs, game.isProxy ? game.simMs : t1 - t0, t2 - t1);
   perfTimer -= dt;
@@ -327,4 +330,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Exposed for the console / upcoming stress harness.
-window.bastion = { game, cam, view, ctl, renderer, lab };
+window.bastion = { game, cam, view, ctl, renderer, lab, audio };

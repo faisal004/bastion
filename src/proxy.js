@@ -17,6 +17,7 @@ export class GameProxy {
     for (const k of ['path', 'segs', 'pathLen', 'base', 'rocks', 'tufts', 'baseGrid']) this[k] = local[k];
     this.grid = new Uint8Array(local.grid);
     this.towers = []; this.effects = []; this.enemies = []; this.projectiles = []; this.messages = [];
+    this.soundEvents = new Set();
     this.towerMap = new Array(C.COLS * C.ROWS).fill(null);
     this.fxPool = [];
     this.palette = [];
@@ -64,6 +65,7 @@ export class GameProxy {
     this.spawners = { length: s.spawners }; this.baseHit = s.baseHit; this.stress = s.stress; this.time = s.time;
     this.grid = s.grid;
     this.simMs = s.simMs; this.packMs = s.packMs; this.lastSteps = s.steps;
+    for (const kind of s.soundEvents) this.soundEvents.add(kind);
     for (const m of s.messages) this.messages.push(m);
     this.towerMap.fill(null);
     for (const t of s.towers) { t.def = C.TOWERS[t.type]; this.towerMap[t.r * C.COLS + t.c] = t; }
@@ -115,6 +117,7 @@ export class GameProxy {
   }
   startNextWave() { if (!this.canCallWave()) return false; this.cmd('wave'); return true; }
   reset() {
+    this.soundEvents.clear();
     this.cmd('reset');
     this.towers = []; this.towerMap.fill(null); this.effects.length = 0; this.ne = this.np = this.nf = 0;
     this.grid = new Uint8Array(this.baseGrid);

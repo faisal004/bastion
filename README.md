@@ -58,6 +58,7 @@ New enemy types arrive as the waves go on, so the game gets steadily harder.
 | `Space` | Pause |
 | `F` | Game speed 1× → 2× → 4× |
 | `R` (twice) | Restart |
+| Sound on / Sound off | Toggle sound effects (preference is saved) |
 | Wheel / pinch | Zoom |
 | Drag, right-drag, `WASD` / arrows | Pan |
 | `` ` `` | Toggle the performance overlay |
@@ -65,6 +66,10 @@ New enemy types arrive as the waves go on, so the game gets steadily harder.
 | `G` | Toggle renderer: original Canvas 2D ↔ WebGL2 (for before/after demos) |
 | `V` | Toggle 2D ↔ 3D view |
 | `Esc` | Cancel placement / deselect |
+
+Sound effects use the browser Web Audio API and start after your first interaction. Each tower has a distinct firing cue, with effects for construction, upgrades, selling, explosions, fortress damage, wave events, and victory/defeat. Effects are rate-limited; stress tests remain silent. No audio downloads are required.
+
+Run the sound checks with `node scripts/check-audio.mjs`.
 
 ---
 

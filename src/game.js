@@ -96,6 +96,7 @@ export class Game {
     this.effects = [];
     this.spawners = [];
     this.messages = [];
+    this.soundEvents = new Set();
     this.grid = new Uint8Array(this.baseGrid);
     this.towerMap = new Array(COLS * ROWS).fill(null);
     this.nextId = 1;
@@ -107,6 +108,8 @@ export class Game {
     this.fxPool = [];
     this.tmp = { x: 0, y: 0, dx: 0, dy: 0, seg: 0 };
   }
+
+  sound(kind) { if (!this.stress) this.soundEvents.add(kind); }
 
   // ---------- path ----------
   samplePath(d, out) {
@@ -141,6 +144,7 @@ export class Game {
     }
     this.state = 'playing';
     this.wave++;
+    this.sound(this.wave % 10 === 0 ? 'boss' : 'wave');
     this.intermission = 0;
     this.waveInProgress = true;
     const w = this.wave;
@@ -237,6 +241,7 @@ export class Game {
     this.grid[r * COLS + c] = 2;
     this.towerMap[r * COLS + c] = t;
     this.fx('ring', t.x, t.y, 6, 28, def.color, 0.35);
+    if (!free) this.sound('build');
     return t;
   }
 
@@ -251,6 +256,7 @@ export class Game {
     this.gold -= cost;
     t.invested += cost;
     t.level++;
+    this.sound('upgrade');
     this.fx('ring', t.x, t.y, 8, 40, '#faf089', 0.45);
     return true;
   }
@@ -260,6 +266,7 @@ export class Game {
   sellTower(t) {
     const v = this.sellValue(t);
     this.gold += v;
+    this.sound('sell');
     this.towers = this.towers.filter((x) => x !== t);
     this.grid[t.r * COLS + t.c] = 0;
     this.towerMap[t.r * COLS + t.c] = null;
@@ -381,10 +388,12 @@ export class Game {
         e.alive = false;
         this.lives -= e.def.lifeDmg;
         this.baseHit = 0.4;
+        this.sound('base');
         this.fx('ring', this.base.x, this.base.y, 20, 60, '#fc8181', 0.4);
         if (this.lives <= 0) {
           this.lives = 0;
           this.state = 'lost';
+          this.sound('lost');
           this.messages.push({ text: 'The fortress has fallen', kind: 'boss' });
         }
         continue;
@@ -439,6 +448,7 @@ export class Game {
         if (hit) {
           t.cooldown = 1 / st.rate;
           t.flash = 0.25;
+          this.sound(t.type);
           this.fx('ring', t.x, t.y, 10, range, '#bee3f8', 0.45);
         }
         continue;
@@ -449,6 +459,7 @@ export class Game {
       t.angle = Math.atan2(target.y - t.y, target.x - t.x);
       t.cooldown = 1 / st.rate;
       t.flash = 0.06;
+      this.sound(t.type);
       const mx = t.x + Math.cos(t.angle) * 16, my = t.y + Math.sin(t.angle) * 16;
 
       if (fire === 'rail') {
@@ -484,6 +495,7 @@ export class Game {
   }
 
   explode(p) {
+    this.sound('impact');
     const r2 = p.splash * p.splash;
     const enemies = this.enemies;
     const n = this.candidates(p.x, p.y, p.splash), all = n < 0, cnt = all ? enemies.length : n, cand = this.cand;
@@ -524,10 +536,12 @@ export class Game {
       this.score += this.wave * 100;
       if (this.wave >= C.MAX_WAVE) {
         this.state = 'won';
+        this.sound('won');
         this.score += this.lives * 250;
         this.messages.push({ text: 'Victory!', kind: 'wave' });
       } else {
         this.intermission = C.INTERMISSION;
+        this.sound('clear');
         this.messages.push({ text: `Wave ${this.wave} cleared  +${bonus}g`, kind: 'gold' });
       }
     } else if (!this.waveInProgress && this.intermission > 0) {

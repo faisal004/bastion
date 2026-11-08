@@ -50,7 +50,10 @@ export function writeSnapshot(game, spare, palette) {
     id: t.id, type: t.type, c: t.c, r: t.r, x: t.x, y: t.y, level: t.level, angle: t.angle, flash: t.flash,
     mode: t.mode, invested: t.invested, kills: t.kills, damage: t.damage,
   }));
+  const soundEvents = [...game.soundEvents];
+  game.soundEvents.clear();
   return {
+    soundEvents,
     type: 'snap', f, ne, np, nf, newColors, towers,
     grid: game.grid.slice(),
     gold: game.gold, lives: game.lives, score: game.score, kills: game.kills, wave: game.wave,
