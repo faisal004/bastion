@@ -9,6 +9,12 @@ export const OPT_DEFS = [
     names: { naive: 'naive (path per entity)', paths: 'batched paths', sprites: 'sprite atlas', webgl: 'WebGL2 instanced' },
     best: 'webgl',
   },
+  {
+    key: 'grid', label: 'Range queries',
+    choices: ['off', 'on'],
+    names: { off: 'scan every enemy', on: 'spatial hash grid' },
+    best: 'on',
+  },
 ];
 
 export const opts = {};

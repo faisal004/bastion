@@ -1,11 +1,16 @@
 // Simulation. Pure state + fixed-step update. No DOM, no canvas.
 // v0 baseline: object-per-entity arrays, linear scans, filter() cleanup.
 import * as C from './config.js';
+import { opts } from './opts.js';
+import { SpatialGrid } from './grid.js';
 
 const { TILE, COLS, ROWS } = C;
+const GRID_CELL = TILE * 2; // ~ the smallest tower range diameter / 3; tuned in NUMBERS.md
 
 export class Game {
   constructor() {
+    this.sgrid = new SpatialGrid(C.WORLD_W, C.WORLD_H, GRID_CELL);
+    this.scratch = [];
     this.buildMap();
     this.reset();
   }
@@ -234,12 +239,31 @@ export class Game {
 
   stats(t) { return t.def.levels[t.level]; }
 
+  // Enemies that might be within `r` of (x, y). Without the grid that is every enemy;
+  // with it, only those in overlapping cells. Callers still do the exact distance check.
+  // Returns a shared scratch array: use it before the next call.
+  candidates(x, y, r) {
+    if (opts.grid !== 'on') return this.enemies;
+    const g = this.sgrid, out = this.scratch, enemies = this.enemies;
+    const start = g.start, items = g.items;
+    out.length = 0;
+    g.rect(x, y, r);
+    for (let row = g.r0; row <= g.r1; row++) {
+      const base = row * g.cols;
+      for (let c = base + g.c0, ce = base + g.c1; c <= ce; c++) {
+        for (let k = start[c], end = start[c + 1]; k < end; k++) out.push(enemies[items[k]]);
+      }
+    }
+    return out;
+  }
+
   findTarget(t, range) {
     const r2 = range * range;
     const groundOnly = t.def.groundOnly;
     let best = null, bestScore = -Infinity;
-    for (let i = 0; i < this.enemies.length; i++) {
-      const e = this.enemies[i];
+    const list = this.candidates(t.x, t.y, range);
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
       if (!e.alive || (groundOnly && e.def.flying)) continue;
       const dx = e.x - t.x, dy = e.y - t.y;
       const d2 = dx * dx + dy * dy;
@@ -333,6 +357,7 @@ export class Game {
   }
 
   updateTowers(dt) {
+    if (opts.grid === 'on') this.sgrid.build(this.enemies); // enemies have moved: re-bucket (O(n), no allocation)
     for (const t of this.towers) {
       if (t.flash > 0) t.flash -= dt;
       t.cooldown -= dt;
@@ -344,7 +369,9 @@ export class Game {
       if (fire === 'pulse') {
         const r2 = range * range;
         let hit = false;
-        for (const e of this.enemies) {
+        const list = this.candidates(t.x, t.y, range);
+        for (let i = 0; i < list.length; i++) {
+          const e = list[i];
           if (!e.alive) continue;
           const dx = e.x - t.x, dy = e.y - t.y;
           if (dx * dx + dy * dy > r2) continue;
@@ -399,7 +426,9 @@ export class Game {
 
   explode(p) {
     const r2 = p.splash * p.splash;
-    for (const e of this.enemies) {
+    const list = this.candidates(p.x, p.y, p.splash);
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
       if (!e.alive || e.def.flying) continue;
       const dx = e.x - p.x, dy = e.y - p.y;
       if (dx * dx + dy * dy <= r2) this.damage(e, p.dmg, false, p.tower);

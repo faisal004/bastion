@@ -78,6 +78,7 @@ src/
   glrender.js             WebGL2 instanced entity renderer (one draw call) + sprite atlas
   shapes.js               enemy shape painting shared by every renderer
   opts.js                 runtime optimization switches (?baseline, ?opt=key:value)
+  grid.js                 spatial hash grid for range queries
   ui.js                   DOM HUD / shop / selection panel; writes to the DOM only when values change
   main.js                 bootstrap, the single frame loop, input, camera, perf meter
   bot.js                  headless autoplayer, used for balance tuning and long-run tests
@@ -144,6 +145,7 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
 |---|---|
 | Baseline | 7,500 / 150 / 1,500 |
 | + WebGL2 instanced renderer | 15,000 / 300 / 3,000 |
+| + spatial hash grid | 20,000 / 400 / 4,000 (native: none up to 40,000 / 600 / 8,000) |
 
 ### Bottlenecks found
 1. **Per-call Canvas 2D overhead (fixed).** At the target load, drawing cost 10 ms per frame
@@ -152,13 +154,17 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
    - Batching into big paths made it worse: Skia must tessellate the whole path.
    - Sprites drawn with `drawImage` were also worse: Skia cannot merge draws from different sources.
    - WebGL instancing fixed it. See NUMBERS.md for the full comparison.
-2. **O(towers × enemies) simulation (next).** Target search and splash damage scan every enemy,
-   and `filter()` reallocates arrays every step. After fix 1 this dominates from about 15k enemies.
+2. **O(towers × enemies) range queries (fixed).** Target search, splash and frost pulses scanned
+   every enemy. At 30k that took 395 ms per frame. A spatial hash grid brought it to 23 ms.
+3. **Enemy movement and GC churn (next).**
+   - Every enemy re-walks the road's segment list each step (44% of sim time).
+   - `filter()` and per-projectile and per-effect objects cause about one GC every 4 steps at 40k.
 
 ### Optimizations
 | # | What | Switch |
 |---|---|---|
 | 1 | WebGL2 instanced entity renderer (one draw call) | `render`: naive / paths / sprites / **webgl** |
+| 2 | Spatial hash grid: counting-sort rebuild per step, typed arrays, no allocation | `grid`: off / **on** |
 
 Every optimization is a runtime switch, so before and after run on the same build:
 - `?baseline` starts with every switch at its original setting.
@@ -187,6 +193,8 @@ node server.js &
 node scripts/bench.mjs --headed            # ramp in a real Chrome window
 node scripts/bench.mjs --headed --cpu 4    # same, with DevTools 4× CPU throttling
 node scripts/bench.mjs --headed --mode bench --load 5000,100,1000
+node scripts/check-grid.mjs                # grid == full scan, plus a full-game check
+node scripts/profile-sim.mjs 20000 400 4000 opt=grid:on   # per-phase sim profile (Node)
 ```
 - It launches Chrome with a throwaway profile, at 2× DPR, with background throttling disabled.
 - It drives the Stress Lab over the DevTools protocol, prints a table, and can save JSON
@@ -203,7 +211,7 @@ Roadmap:
    The baseline's breaking point is recorded in `NUMBERS.md`.
 3. **Optimization steps**, each behind a runtime toggle so before and after can be shown
    live:
-   - spatial hash grid for target and splash queries
+   - ✅ spatial hash grid for target, splash and frost queries
    - struct-of-arrays / typed-array pools with swap-remove (no per-frame allocation, no GC churn)
    - ✅ instanced WebGL2 rendering (batched paths and sprite atlases were tried first, and lost)
    - viewport culling

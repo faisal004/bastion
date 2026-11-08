@@ -66,6 +66,9 @@ in the same session.
 | # | Optimization | Breaks at, 4× CPU (before → after) | Breaks at, native (before → after) | Draw ms at 5k/100/1k, 4× CPU |
 |---|---|---|---|---|
 | 1 | WebGL2 instanced entity renderer | 7,500 → **15,000** enemies | 15,000 → **30,000** enemies | 10.11 → **2.47** |
+| 2 | Spatial hash grid for range queries | 15,000 → **20,000** enemies | 30,000 → **> 40,000** (passes the whole ramp) | sim at 30k: 395 → **23** ms/frame |
+
+The table's last column changes with each row, because each optimization targets a different bottleneck.
 
 ### 1 · Entity rendering: what was tried
 
@@ -102,3 +105,48 @@ Full ramps: `bench/results/opt1-render-*.json`.
 
 The bottleneck has moved: from 15k enemies up, **simulation** time passes draw time and then
 explodes (472 ms at 30k). That is the O(towers × enemies) target search and splash, and it is next.
+
+
+### 2 · Spatial hash grid
+
+**What changed.** [src/grid.js](src/grid.js) buckets every enemy into 80 px cells (2 tiles), once
+per simulation step.
+- The rebuild is a counting sort into flat `Int32Array`s (count, then prefix-sum, then fill).
+  It is O(n) and allocates nothing after warm-up.
+- Tower targeting, Cannon splash and Frost pulses ask `game.candidates(x, y, r)` for the
+  enemies in the cells their range touches, instead of scanning all of them.
+- The exact distance checks stay, so results are unchanged.
+
+**Correctness.** `node scripts/check-grid.mjs`:
+- 8,000 random range queries (including off-map enemies and radii up to 9 tiles) return
+  exactly the same sets as a full scan: **0 mismatches**.
+- A full 50-wave bot game plays out the same with the grid off and on (won, 15 lives, 6,528 kills).
+
+**Results**, 4× CPU, renderer = webgl in both runs (`bench/results/opt2-grid-*.json`):
+
+| Enemies | Towers | Projectiles | grid off: fps@95% · sim ms | grid on: fps@95% · sim ms |
+|---:|---:|---:|---|---|
+| 5,000 | 100 | 1,000 | 57.1 · 0.97 | 57.1 · 0.72 |
+| 10,000 | 200 | 2,000 | 56.8 · 2.82 | 56.8 · 1.99 |
+| 15,000 | 300 | 3,000 | 30.0 · 6.42 **FAIL** | 57.1 · 3.87 pass |
+| 20,000 | 400 | 4,000 | 19.7 · 13.63 FAIL | 29.9 · 8.08 **FAIL** |
+| 30,000 | 600 | 6,000 | 2.1 · 395.53 FAIL | 15.1 · 23.46 FAIL |
+
+At native speed, with the grid on, every ramp step passes, up to 40,000 / 600 / 8,000
+(59.2 fps @95%, sim 3.95 ms, draw 4.37 ms).
+
+**What `scripts/profile-sim.mjs` says is left** (Node, per sim step, grid on):
+
+| Load | Step | Enemy movement | Towers | `filter()` cleanup | Projectiles |
+|---|---:|---:|---:|---:|---:|
+| 20k / 400 / 4k | 1.66 ms | 44% | 37% | 12% | 6% |
+
+- At 40k / 600 / 8k a step takes 5.35 ms (15.60 ms with the grid off).
+- **Enemy movement** is now the biggest phase. Each enemy walks the road's segment list every
+  step to find its position.
+- **Garbage collection**: 89 GCs in 360 steps at 40k, from `filter()` copying the entity arrays and
+  from a new object per projectile and effect.
+- The browser's "sim ms per frame" grows faster than this past the breaking point. Slow frames
+  make the fixed-timestep loop run 2–4 steps per frame to keep game time correct.
+- Note: on a normal game (~100 enemies) the grid costs about 1.7 µs more per step than scanning.
+  That is irrelevant, so it stays on.
