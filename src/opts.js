@@ -15,6 +15,18 @@ export const OPT_DEFS = [
     names: { off: 'scan every enemy', on: 'spatial hash grid' },
     best: 'on',
   },
+  {
+    key: 'path', label: 'Enemy movement',
+    choices: ['scan', 'cached'],
+    names: { scan: 'search path each step', cached: 'cached segment' },
+    best: 'cached',
+  },
+  {
+    key: 'alloc', label: 'Entity memory',
+    choices: ['filter', 'pooled'],
+    names: { filter: 'filter() + new objects', pooled: 'pools + in-place compaction' },
+    best: 'pooled',
+  },
 ];
 
 export const opts = {};

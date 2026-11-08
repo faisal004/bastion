@@ -7,10 +7,20 @@ import { SpatialGrid } from './grid.js';
 const { TILE, COLS, ROWS } = C;
 const GRID_CELL = TILE * 2; // ~ the smallest tower range diameter / 3; tuned in NUMBERS.md
 
+function compact(list, pool, isEffect) {
+  let w = 0;
+  for (let i = 0; i < list.length; i++) {
+    const o = list[i];
+    if (isEffect ? o.life > 0 : o.alive) list[w++] = o;
+    else pool.push(o);
+  }
+  list.length = w;
+}
+
 export class Game {
   constructor() {
     this.sgrid = new SpatialGrid(C.WORLD_W, C.WORLD_H, GRID_CELL);
-    this.scratch = [];
+    this.cand = new Int32Array(4096);
     this.buildMap();
     this.reset();
   }
@@ -91,15 +101,20 @@ export class Game {
     this.nextId = 1;
     this.baseHit = 0;
     this.stress = false; // set by the stress lab: enemies loop the road and never cost lives
+    // free lists used when opts.alloc === 'pooled'
+    this.enemyPool = [];
+    this.projectilePool = [];
+    this.fxPool = [];
+    this.tmp = { x: 0, y: 0, dx: 0, dy: 0, seg: 0 };
   }
 
   // ---------- path ----------
   samplePath(d, out) {
     const segs = this.segs;
-    let s = segs[segs.length - 1];
-    for (let i = 0; i < segs.length; i++) {
-      if (d < segs[i].start + segs[i].len) { s = segs[i]; break; }
-    }
+    let i = 0;
+    while (i < segs.length - 1 && d >= segs[i].start + segs[i].len) i++;
+    const s = segs[i];
+    out.seg = i;
     const t = d - s.start;
     out.x = s.ax + s.dx * t;
     out.y = s.ay + s.dy * t;
@@ -143,20 +158,24 @@ export class Game {
   spawnEnemy(type, hpMul = 1, rewardMul = 1, armorBonus = 0, dist = 0) {
     const def = C.ENEMIES[type];
     const hp = Math.round(def.hp * hpMul);
-    const e = {
-      id: this.nextId++, type, def,
-      x: 0, y: 0, px: 0, py: 0, dirX: 1, dirY: 0,
-      ox: 0, oy: 0,
-      dist,
-      offset: (Math.random() - 0.5) * TILE * 0.45,
-      hp, maxHp: hp,
-      speed: def.speed * TILE,
-      armor: def.armor + (def.armor > 0 ? armorBonus : 0),
-      reward: Math.round(def.reward * rewardMul),
-      slow: 0, slowT: 0, hitT: 0,
-      alive: true,
+    const pooled = opts.alloc === 'pooled' && this.enemyPool.length > 0;
+    // every enemy object has exactly this shape, so recycled objects keep one hidden class
+    const e = pooled ? this.enemyPool.pop() : {
+      id: 0, type: '', def: null, x: 0, y: 0, px: 0, py: 0, dirX: 1, dirY: 0, ox: 0, oy: 0,
+      dist: 0, seg: 0, offset: 0, hp: 0, maxHp: 0, speed: 0, armor: 0, reward: 0,
+      slow: 0, slowT: 0, hitT: 0, alive: true,
     };
-    const p = this.samplePath(dist, {});
+    e.id = this.nextId++; e.type = type; e.def = def;
+    e.dist = dist;
+    e.offset = (Math.random() - 0.5) * TILE * 0.45;
+    e.hp = hp; e.maxHp = hp;
+    e.speed = def.speed * TILE;
+    e.armor = def.armor + (def.armor > 0 ? armorBonus : 0);
+    e.reward = Math.round(def.reward * rewardMul);
+    e.slow = 0; e.slowT = 0; e.hitT = 0;
+    e.alive = true;
+    const p = this.samplePath(dist, this.tmp);
+    e.seg = p.seg;
     e.ox = -p.dy * e.offset; e.oy = p.dx * e.offset;
     e.x = e.px = p.x + e.ox;
     e.y = e.py = p.y + e.oy;
@@ -166,10 +185,26 @@ export class Game {
   }
 
   spawnProjectile(kind, x, y, target, speed, dmg, splash, tower) {
-    this.projectiles.push({
-      kind, x, y, px: x, py: y, target, tx: target.x, ty: target.y,
-      speed, dmg, splash, tower, alive: true,
-    });
+    const p = opts.alloc === 'pooled' && this.projectilePool.length > 0 ? this.projectilePool.pop() : {
+      kind: '', x: 0, y: 0, px: 0, py: 0, target: null, targetId: 0, tx: 0, ty: 0,
+      speed: 0, dmg: 0, splash: 0, tower: null, alive: true,
+    };
+    p.kind = kind; p.x = p.px = x; p.y = p.py = y;
+    // targetId guards against enemy objects being recycled while this shot is in flight
+    p.target = target; p.targetId = target.id; p.tx = target.x; p.ty = target.y;
+    p.speed = speed; p.dmg = dmg; p.splash = splash; p.tower = tower; p.alive = true;
+    this.projectiles.push(p);
+  }
+
+  // Effects share one object shape: ring (r0 -> r1), pop (r0), tracer (x,y -> x2,y2), text.
+  fx(kind, x, y, r0, r1, color, life, x2 = 0, y2 = 0, text = '') {
+    const f = opts.alloc === 'pooled' && this.fxPool.length > 0 ? this.fxPool.pop() : {
+      kind: '', x: 0, y: 0, x2: 0, y2: 0, r0: 0, r1: 0, color: '', text: '', life: 0, max: 0,
+    };
+    f.kind = kind; f.x = x; f.y = y; f.x2 = x2; f.y2 = y2; f.r0 = r0; f.r1 = r1;
+    f.color = color; f.text = text; f.life = life; f.max = life;
+    this.effects.push(f);
+    return f;
   }
 
   get enemyCount() { return this.enemies.length; }
@@ -201,7 +236,7 @@ export class Game {
     this.towers.push(t);
     this.grid[r * COLS + c] = 2;
     this.towerMap[r * COLS + c] = t;
-    this.effects.push({ kind: 'ring', x: t.x, y: t.y, r0: 6, r1: 28, life: 0.35, max: 0.35, color: def.color });
+    this.fx('ring', t.x, t.y, 6, 28, def.color, 0.35);
     return t;
   }
 
@@ -216,7 +251,7 @@ export class Game {
     this.gold -= cost;
     t.invested += cost;
     t.level++;
-    this.effects.push({ kind: 'ring', x: t.x, y: t.y, r0: 8, r1: 40, life: 0.45, max: 0.45, color: '#faf089' });
+    this.fx('ring', t.x, t.y, 8, 40, '#faf089', 0.45);
     return true;
   }
 
@@ -228,7 +263,7 @@ export class Game {
     this.towers = this.towers.filter((x) => x !== t);
     this.grid[t.r * COLS + t.c] = 0;
     this.towerMap[t.r * COLS + t.c] = null;
-    this.effects.push({ kind: 'text', x: t.x, y: t.y - 10, text: `+${v}`, color: '#f6e05e', life: 0.9, max: 0.9 });
+    this.fx('text', t.x, t.y - 10, 0, 0, '#f6e05e', 0.9, 0, 0, `+${v}`);
     return v;
   }
 
@@ -239,31 +274,35 @@ export class Game {
 
   stats(t) { return t.def.levels[t.level]; }
 
-  // Enemies that might be within `r` of (x, y). Without the grid that is every enemy;
-  // with it, only those in overlapping cells. Callers still do the exact distance check.
-  // Returns a shared scratch array: use it before the next call.
+  // Indices of enemies that might be within `r` of (x, y), written into this.cand (a reused
+  // Int32Array). Returns the count, or -1 meaning "every enemy" (grid off).
+  // Callers still do the exact distance check.
   candidates(x, y, r) {
-    if (opts.grid !== 'on') return this.enemies;
-    const g = this.sgrid, out = this.scratch, enemies = this.enemies;
-    const start = g.start, items = g.items;
-    out.length = 0;
+    if (opts.grid !== 'on') return -1;
+    const g = this.sgrid, start = g.start, items = g.items;
     g.rect(x, y, r);
+    let n = 0, cand = this.cand;
     for (let row = g.r0; row <= g.r1; row++) {
       const base = row * g.cols;
-      for (let c = base + g.c0, ce = base + g.c1; c <= ce; c++) {
-        for (let k = start[c], end = start[c + 1]; k < end; k++) out.push(enemies[items[k]]);
+      const k0 = start[base + g.c0], k1 = start[base + g.c1 + 1]; // a row's cells are contiguous in items
+      if (n + (k1 - k0) > cand.length) {
+        const bigger = new Int32Array(Math.max(cand.length * 2, n + (k1 - k0)));
+        bigger.set(cand.subarray(0, n));
+        this.cand = cand = bigger;
       }
+      for (let k = k0; k < k1; k++) cand[n++] = items[k];
     }
-    return out;
+    return n;
   }
 
   findTarget(t, range) {
     const r2 = range * range;
     const groundOnly = t.def.groundOnly;
     let best = null, bestScore = -Infinity;
-    const list = this.candidates(t.x, t.y, range);
-    for (let i = 0; i < list.length; i++) {
-      const e = list[i];
+    const enemies = this.enemies;
+    const n = this.candidates(t.x, t.y, range), all = n < 0, cnt = all ? enemies.length : n, cand = this.cand;
+    for (let i = 0; i < cnt; i++) {
+      const e = enemies[all ? i : cand[i]];
       if (!e.alive || (groundOnly && e.def.flying)) continue;
       const dx = e.x - t.x, dy = e.y - t.y;
       const d2 = dx * dx + dy * dy;
@@ -292,9 +331,9 @@ export class Game {
       this.score += e.reward * 10;
       this.kills++;
       if (tower) tower.kills++;
-      this.effects.push({ kind: 'pop', x: e.x, y: e.y, r: e.def.radius * TILE, color: e.def.color, life: 0.3, max: 0.3 });
+      this.fx('pop', e.x, e.y, e.def.radius * TILE, 0, e.def.color, 0.3);
       if (e.reward >= 10) {
-        this.effects.push({ kind: 'text', x: e.x, y: e.y - 8, text: `+${e.reward}`, color: '#f6e05e', life: 0.8, max: 0.8 });
+        this.fx('text', e.x, e.y - 8, 0, 0, '#f6e05e', 0.8, 0, 0, `+${e.reward}`);
       }
     }
   }
@@ -325,9 +364,13 @@ export class Game {
   }
 
   updateEnemies(dt) {
-    const tmp = {};
+    const tmp = this.tmp;
+    const cached = opts.path === 'cached';
+    const segs = this.segs, lastSeg = segs.length - 1;
     const k = Math.min(1, dt * 10);
-    for (const e of this.enemies) {
+    const enemies = this.enemies;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
       if (!e.alive) continue;
       e.px = e.x; e.py = e.y;
       if (e.slowT > 0) { e.slowT -= dt; if (e.slowT <= 0) e.slow = 0; }
@@ -338,7 +381,7 @@ export class Game {
         e.alive = false;
         this.lives -= e.def.lifeDmg;
         this.baseHit = 0.4;
-        this.effects.push({ kind: 'ring', x: this.base.x, y: this.base.y, r0: 20, r1: 60, life: 0.4, max: 0.4, color: '#fc8181' });
+        this.fx('ring', this.base.x, this.base.y, 20, 60, '#fc8181', 0.4);
         if (this.lives <= 0) {
           this.lives = 0;
           this.state = 'lost';
@@ -346,7 +389,17 @@ export class Game {
         }
         continue;
       }
-      this.samplePath(e.dist, tmp);
+      if (cached) {
+        // enemies only move forward, so advance from the remembered segment: O(1) amortized
+        let si = e.seg;
+        if (e.dist < segs[si].start) si = 0; // looped back to the start (stress mode)
+        while (si < lastSeg && e.dist >= segs[si].start + segs[si].len) si++;
+        e.seg = si;
+        const sg = segs[si], t = e.dist - sg.start;
+        tmp.x = sg.ax + sg.dx * t; tmp.y = sg.ay + sg.dy * t; tmp.dx = sg.dx; tmp.dy = sg.dy;
+      } else {
+        this.samplePath(e.dist, tmp);
+      }
       // smooth the lateral offset so lanes don't snap at corners
       e.ox += (-tmp.dy * e.offset - e.ox) * k;
       e.oy += (tmp.dx * e.offset - e.oy) * k;
@@ -358,7 +411,9 @@ export class Game {
 
   updateTowers(dt) {
     if (opts.grid === 'on') this.sgrid.build(this.enemies); // enemies have moved: re-bucket (O(n), no allocation)
-    for (const t of this.towers) {
+    const towers = this.towers;
+    for (let ti = 0; ti < towers.length; ti++) {
+      const t = towers[ti];
       if (t.flash > 0) t.flash -= dt;
       t.cooldown -= dt;
       if (t.cooldown > 0) continue;
@@ -369,9 +424,10 @@ export class Game {
       if (fire === 'pulse') {
         const r2 = range * range;
         let hit = false;
-        const list = this.candidates(t.x, t.y, range);
-        for (let i = 0; i < list.length; i++) {
-          const e = list[i];
+        const enemies = this.enemies;
+        const n = this.candidates(t.x, t.y, range), all = n < 0, cnt = all ? enemies.length : n, cand = this.cand;
+        for (let i = 0; i < cnt; i++) {
+          const e = enemies[all ? i : cand[i]];
           if (!e.alive) continue;
           const dx = e.x - t.x, dy = e.y - t.y;
           if (dx * dx + dy * dy > r2) continue;
@@ -383,7 +439,7 @@ export class Game {
         if (hit) {
           t.cooldown = 1 / st.rate;
           t.flash = 0.25;
-          this.effects.push({ kind: 'ring', x: t.x, y: t.y, r0: 10, r1: range, life: 0.45, max: 0.45, color: '#bee3f8' });
+          this.fx('ring', t.x, t.y, 10, range, '#bee3f8', 0.45);
         }
         continue;
       }
@@ -397,7 +453,7 @@ export class Game {
 
       if (fire === 'rail') {
         this.damage(target, st.dmg, true, t);
-        this.effects.push({ kind: 'tracer', x1: mx, y1: my, x2: target.x, y2: target.y, color: t.def.color, life: 0.18, max: 0.18 });
+        this.fx('tracer', mx, my, 0, 0, t.def.color, 0.18, target.x, target.y);
       } else {
         this.spawnProjectile(fire, mx, my, target, st.pspeed * TILE, st.dmg, (st.splash || 0) * TILE, t);
       }
@@ -405,18 +461,21 @@ export class Game {
   }
 
   updateProjectiles(dt) {
-    for (const p of this.projectiles) {
+    const projectiles = this.projectiles;
+    for (let i = 0; i < projectiles.length; i++) {
+      const p = projectiles[i];
       if (!p.alive) continue;
       p.px = p.x; p.py = p.y;
-      if (p.target && p.target.alive) { p.tx = p.target.x; p.ty = p.target.y; }
+      const live = p.target !== null && p.target.alive && p.target.id === p.targetId;
+      if (live) { p.tx = p.target.x; p.ty = p.target.y; }
       const dx = p.tx - p.x, dy = p.ty - p.y;
-      const d = Math.hypot(dx, dy);
+      const d = Math.sqrt(dx * dx + dy * dy);
       const step = p.speed * dt;
       if (d <= step) {
         p.x = p.tx; p.y = p.ty;
         p.alive = false;
         if (p.kind === 'shell') this.explode(p);
-        else if (p.target && p.target.alive) this.damage(p.target, p.dmg, false, p.tower);
+        else if (live) this.damage(p.target, p.dmg, false, p.tower);
       } else {
         p.x += (dx / d) * step;
         p.y += (dy / d) * step;
@@ -426,22 +485,31 @@ export class Game {
 
   explode(p) {
     const r2 = p.splash * p.splash;
-    const list = this.candidates(p.x, p.y, p.splash);
-    for (let i = 0; i < list.length; i++) {
-      const e = list[i];
+    const enemies = this.enemies;
+    const n = this.candidates(p.x, p.y, p.splash), all = n < 0, cnt = all ? enemies.length : n, cand = this.cand;
+    for (let i = 0; i < cnt; i++) {
+      const e = enemies[all ? i : cand[i]];
       if (!e.alive || e.def.flying) continue;
       const dx = e.x - p.x, dy = e.y - p.y;
       if (dx * dx + dy * dy <= r2) this.damage(e, p.dmg, false, p.tower);
     }
-    this.effects.push({ kind: 'ring', x: p.x, y: p.y, r0: 4, r1: p.splash, life: 0.3, max: 0.3, color: '#fbd38d' });
+    this.fx('ring', p.x, p.y, 4, p.splash, '#fbd38d', 0.3);
   }
 
   updateEffects(dt) {
-    for (const f of this.effects) f.life -= dt;
+    const effects = this.effects;
+    for (let i = 0; i < effects.length; i++) effects[i].life -= dt;
     if (this.baseHit > 0) this.baseHit -= dt;
   }
 
   cleanup() {
+    if (opts.alloc === 'pooled') {
+      // compact in place (order kept), recycling the dead: no new arrays, no garbage
+      compact(this.enemies, this.enemyPool, false);
+      compact(this.projectiles, this.projectilePool, false);
+      compact(this.effects, this.fxPool, true);
+      return;
+    }
     this.enemies = this.enemies.filter((e) => e.alive);
     this.projectiles = this.projectiles.filter((p) => p.alive);
     this.effects = this.effects.filter((f) => f.life > 0);

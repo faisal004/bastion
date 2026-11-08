@@ -146,6 +146,7 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
 | Baseline | 7,500 / 150 / 1,500 |
 | + WebGL2 instanced renderer | 15,000 / 300 / 3,000 |
 | + spatial hash grid | 20,000 / 400 / 4,000 (native: none up to 40,000 / 600 / 8,000) |
+| + allocation-free simulation | 30,000 / 600 / 6,000 (native: none up to 40,000 / 600 / 8,000) |
 
 ### Bottlenecks found
 1. **Per-call Canvas 2D overhead (fixed).** At the target load, drawing cost 10 ms per frame
@@ -156,15 +157,21 @@ Numbers live in [`NUMBERS.md`](NUMBERS.md). Summary (Apple M5, 4× CPU throttle)
    - WebGL instancing fixed it. See NUMBERS.md for the full comparison.
 2. **O(towers × enemies) range queries (fixed).** Target search, splash and frost pulses scanned
    every enemy. At 30k that took 395 ms per frame. A spatial hash grid brought it to 23 ms.
-3. **Enemy movement and GC churn (next).**
-   - Every enemy re-walks the road's segment list each step (44% of sim time).
-   - `filter()` and per-projectile and per-effect objects cause about one GC every 4 steps at 40k.
+3. **Enemy movement and GC churn (fixed).**
+   - Every enemy re-walked the road's segment list each step (44% of sim time).
+   - Hidden allocations (a reallocating scratch array, `Math.hypot`, `for…of` iterators) plus
+     `filter()` and new objects caused about one GC every 4 steps at 40k.
+   - Now: cached segments, pools, in-place compaction. 6.6 → 3.1 ms per step, 92 → 11 GCs.
+4. **Canvas 2D layers (next).** The ground is redrawn per tile every frame, and towers and death
+   effects are drawn one by one. At 20k+ this is most of the remaining draw time.
 
 ### Optimizations
 | # | What | Switch |
 |---|---|---|
 | 1 | WebGL2 instanced entity renderer (one draw call) | `render`: naive / paths / sprites / **webgl** |
 | 2 | Spatial hash grid: counting-sort rebuild per step, typed arrays, no allocation | `grid`: off / **on** |
+| 3 | Cached path segment per enemy | `path`: scan / **cached** |
+| 3 | Object pools + in-place compaction (fixed object shapes, id-checked targets) | `alloc`: filter / **pooled** |
 
 Every optimization is a runtime switch, so before and after run on the same build:
 - `?baseline` starts with every switch at its original setting.
@@ -194,6 +201,8 @@ node scripts/bench.mjs --headed            # ramp in a real Chrome window
 node scripts/bench.mjs --headed --cpu 4    # same, with DevTools 4× CPU throttling
 node scripts/bench.mjs --headed --mode bench --load 5000,100,1000
 node scripts/check-grid.mjs                # grid == full scan, plus a full-game check
+node scripts/check-sim.mjs                 # optimized sim stays bit-identical to the original
+node --expose-gc scripts/check-memory.mjs  # heap across a full 50-wave game
 node scripts/profile-sim.mjs 20000 400 4000 opt=grid:on   # per-phase sim profile (Node)
 ```
 - It launches Chrome with a throwaway profile, at 2× DPR, with background throttling disabled.
@@ -212,7 +221,7 @@ Roadmap:
 3. **Optimization steps**, each behind a runtime toggle so before and after can be shown
    live:
    - ✅ spatial hash grid for target, splash and frost queries
-   - struct-of-arrays / typed-array pools with swap-remove (no per-frame allocation, no GC churn)
+   - ✅ allocation-free simulation: object pools, in-place compaction, cached path segments
    - ✅ instanced WebGL2 rendering (batched paths and sprite atlases were tried first, and lost)
    - viewport culling
    - a cached static background layer

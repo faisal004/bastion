@@ -483,12 +483,12 @@ export class Renderer {
         }
         case 'pop': {
           ctx.fillStyle = f.color;
-          ctx.beginPath(); ctx.arc(f.x, f.y, f.r * (1.6 - k * 0.6), 0, TAU); ctx.fill();
+          ctx.beginPath(); ctx.arc(f.x, f.y, f.r0 * (1.6 - k * 0.6), 0, TAU); ctx.fill();
           break;
         }
         case 'tracer': {
           ctx.strokeStyle = f.color; ctx.lineWidth = 3 * k + 0.5;
-          ctx.beginPath(); ctx.moveTo(f.x1, f.y1); ctx.lineTo(f.x2, f.y2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(f.x2, f.y2); ctx.stroke();
           break;
         }
         case 'text': {

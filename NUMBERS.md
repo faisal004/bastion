@@ -67,6 +67,7 @@ in the same session.
 |---|---|---|---|---|
 | 1 | WebGL2 instanced entity renderer | 7,500 → **15,000** enemies | 15,000 → **30,000** enemies | 10.11 → **2.47** |
 | 2 | Spatial hash grid for range queries | 15,000 → **20,000** enemies | 30,000 → **> 40,000** (passes the whole ramp) | sim at 30k: 395 → **23** ms/frame |
+| 3 | Allocation-free sim: cached path segment, pools, in-place compaction, no hidden allocations | 20,000 → **30,000** enemies | > 40,000 (frame work at 40k: 8.3 → 7.0 ms) | sim per step at 40k (Node): 6.60 → **3.07** ms; GCs 92 → 11 |
 
 The table's last column changes with each row, because each optimization targets a different bottleneck.
 
@@ -150,3 +151,64 @@ At native speed, with the grid on, every ramp step passes, up to 40,000 / 600 / 
   make the fixed-timestep loop run 2–4 steps per frame to keep game time correct.
 - Note: on a normal game (~100 enemies) the grid costs about 1.7 µs more per step than scanning.
   That is irrelevant, so it stays on.
+
+
+### 3 · Allocation-free simulation
+
+Three things, found by profiling rather than guessing:
+
+1. **Hidden allocations** (always on; they were bugs). V8's sampling heap profiler, with collected
+   objects included, showed ~1.9 GB allocated over 360 steps at 40k:
+   - The grid's candidate list was a JS array cleared with `length = 0`. That frees its backing
+     store, so every query regrew it with `push`. It is now a reused `Int32Array` of indices.
+   - `Math.hypot` allocated. It is replaced with `Math.sqrt(dx*dx + dy*dy)`.
+   - `for…of` in hot loops created iterator objects. They are now indexed loops.
+   - After this: ~55 MB over the same run, most of it the initial 40k enemies.
+2. **`path`: scan → cached.** Each enemy remembers its road segment and only steps forward,
+   instead of searching the segment list every step. Movement at 40k: 1.67 → 1.10 ms per step.
+3. **`alloc`: filter → pooled.**
+   - Dead enemies, projectiles and effects are compacted out of their arrays in place, keeping
+     order, and pushed onto free lists. Spawns reuse them.
+   - Every entity kind has one fixed object shape, so recycled objects keep one hidden class.
+   - Projectiles remember their target's `id`, so a recycled enemy object is never mistaken for
+     the enemy they were fired at.
+
+**Correctness.** `node scripts/check-sim.mjs` runs two games in lockstep from the same seed:
+original `path`/`alloc` vs optimized. It compares the full state (every enemy's position, HP and
+slow; projectiles; gold; lives; kills) after every step. Results:
+- **Bit-identical** for 90,000 steps of a bot game (through wave 32).
+- **Bit-identical** for 1,800 steps of a 3,000-enemy stress loop.
+
+**Per-step cost at 40k / 600 / 8k** (Node, `scripts/profile-sim.mjs`, 360 steps, `--trace-gc`):
+
+| Configuration | ms / step | Movement | Cleanup | GC scavenges |
+|---|---:|---:|---:|---:|
+| Before (end of optimization 2) | 6.60 | 2.00 | 0.88 | 92 |
+| + hidden allocations removed | 4.79 | 1.67 | 0.60 | 25 |
+| + `path: cached` | 4.14 | 1.10 | 0.60 | 25 |
+| + `alloc: pooled` | **3.07** | 1.12 | **0.15** | **11** |
+
+**Browser, 4× CPU, renderer = webgl and grid = on in both runs** (`bench/results/opt3-*.json`).
+"Before" here is `path:scan,alloc:filter` on the current build, so the hidden-allocation fixes
+are in both runs.
+
+| Enemies | Towers | Projectiles | path+alloc off: fps@95% · sim · draw | all on: fps@95% · sim · draw |
+|---:|---:|---:|---|---|
+| 15,000 | 300 | 3,000 | 56.8 · 3.41 · 6.56 | 56.8 · 2.67 · 6.71 |
+| 20,000 | 400 | 4,000 | 30.1 · 6.52 · 9.52 **FAIL** | 56.8 · 4.46 · 9.37 pass |
+| 30,000 | 600 | 6,000 | 14.9 · 27.84 · 14.56 FAIL | 15.0 · 16.39 · 14.90 **FAIL** |
+| 40,000 | 600 | 8,000 | 6.7 · 96.95 · 20.00 FAIL | 12.1 · 25.91 · 16.48 FAIL |
+
+**Memory over a complete 50-wave game** (`node --expose-gc scripts/check-memory.mjs`, heap after a forced GC):
+
+| Wave | start | 10 | 20 | 30 | 40 | 50 |
+|---|---:|---:|---:|---:|---:|---:|
+| Heap MB | 3.95 | 4.21 | 4.33 | 4.35 | 4.41 | 4.45 |
+
+The heap stays flat. The +0.5 MB is the 240 towers the bot builds and the pools sized to peak load.
+
+**What is left.** At 20k, draw (9.4 ms) is twice the sim time (4.5 ms), and most of it is now on
+the Canvas 2D layers:
+- the ground is redrawn tile by tile every frame;
+- ~400 towers, each drawn with its own calls;
+- thousands of short-lived death effects, each with its own `globalAlpha` and `arc`.

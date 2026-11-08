@@ -27,7 +27,8 @@ for (let trial = 0; trial < 20; trial++) {
   for (let q = 0; q < 400; q++) {
     const x = Math.random() * (C.WORLD_W + 200) - 100, y = Math.random() * (C.WORLD_H + 200) - 100;
     const r = 10 + Math.random() * 9 * C.TILE;
-    const viaGrid = inRange(g.candidates(x, y, r), x, y, r);
+    const n = g.candidates(x, y, r);
+    const viaGrid = inRange(Array.from(g.cand.subarray(0, n), (i) => g.enemies[i]), x, y, r);
     const viaScan = inRange(g.enemies, x, y, r);
     checked++;
     if (viaGrid.size !== viaScan.size || [...viaScan].some((id) => !viaGrid.has(id))) mismatches++;
@@ -35,12 +36,15 @@ for (let trial = 0; trial < 20; trial++) {
 }
 console.log(`range queries: ${checked} checked, ${mismatches} mismatches`);
 
-// Whole-game check: the bot must still win with the grid on (tie-breaks between equal
-// scores may differ, and spawn lanes are random, so outcomes are compared loosely).
+// Whole-game check with a seeded RNG. Targets can still differ when two enemies tie on score
+// (e.g. equal HP in 'strongest' mode), because the grid visits enemies in a different order.
+const realRandom = Math.random;
 for (const mode of ['off', 'on']) {
   opts.grid = mode;
+  Math.random = C.mulberry32(7); // same lane offsets in both runs
   const t0 = performance.now();
   const r = simulate(Game, ['blaster', 'blaster', 'cannon', 'frost', 'sniper', 'cannon', 'blaster', 'sniper']);
+  Math.random = realRandom;
   console.log(`full game, grid ${mode}: ${r.state} at wave ${r.wave}, lives ${r.lives}, kills ${r.kills} (${Math.round(performance.now() - t0)} ms)`);
 }
 process.exit(mismatches ? 1 : 0);
