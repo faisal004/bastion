@@ -14,8 +14,8 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; user-select: none; }
 
-#app { display: grid; grid-template-columns: 1fr 290px; grid-template-rows: 54px 1fr; height: 100vh; }
-#hud { grid-column: 1 / 3; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+#app { display: grid; grid-template-columns: 1fr; grid-template-rows: 54px 1fr auto; height: 100vh; }
+#hud { grid-column: 1; display: flex; align-items: center; gap: 14px; padding: 0 14px;
   background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { font-weight: 800; letter-spacing: 0.18em; color: var(--accent); margin-right: 6px; }
 .stat { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--panel-2);
@@ -50,10 +50,11 @@ kbd { font: 11px ui-monospace, monospace; padding: 1px 5px; border-radius: 4px; 
 #stage { position: relative; overflow: hidden; background: var(--bg); }
 #game { display: block; cursor: crosshair; touch-action: none; }
 
-#side { background: var(--panel); border-left: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-#side h3 { margin: 2px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
-#shop { display: flex; flex-direction: column; gap: 8px; }
-.card { display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 10px; position: relative; }
+/* bottom dock: build cards, then the selected tower, then hints */
+#side { background: var(--panel); border-top: 1px solid var(--line); padding: 8px 12px; display: flex; flex-direction: row; align-items: stretch; gap: 10px; overflow-x: auto; min-height: 96px; }
+#side h3 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); writing-mode: vertical-rl; transform: rotate(180deg); align-self: center; }
+#shop { display: flex; flex-direction: row; gap: 8px; flex: none; }
+.card { display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 8px 10px; position: relative; width: 222px; }
 .card.active { border-color: var(--accent); background: #18332f; box-shadow: 0 0 0 1px var(--accent) inset; }
 .card.poor { opacity: .55; }
 .card.poor .cost { color: var(--danger); }
@@ -63,20 +64,21 @@ kbd { font: 11px ui-monospace, monospace; padding: 1px 5px; border-radius: 4px; 
 .card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .card-top { display: flex; justify-content: space-between; gap: 8px; }
 .cost { color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums; }
-.card-desc { color: var(--muted); font-size: 12px; }
+.card-desc { color: var(--muted); font-size: 11.5px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card-stat { color: #a9b6c6; font-size: 11px; font-variant-numeric: tabular-nums; padding-right: 22px; }
 
-#sel { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 4px; }
+#sel { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; flex: none; width: 450px;
+  display: grid; grid-template-columns: 1fr 1fr 150px; grid-auto-rows: min-content; column-gap: 16px; row-gap: 2px; align-content: start; }
 #sel.hidden, .hidden { display: none !important; }
-.sel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.sel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; grid-column: 1 / 3; grid-row: 1; }
 .sel-head .lvl { margin-left: auto; color: var(--gold); font-size: 12px; }
 .row { display: flex; justify-content: space-between; font-size: 13px; font-variant-numeric: tabular-nums; }
 .row span { color: var(--muted); }
 .row em { color: #68d391; font-style: normal; }
-.sel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
-.sel-actions button { padding: 7px 6px; font-size: 13px; }
-#sel .wide { margin-top: 6px; }
-.help { margin-top: auto; color: var(--muted); font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.sel-actions { display: grid; grid-template-columns: 1fr; gap: 4px; grid-column: 3; grid-row: 2 / 5; align-content: start; }
+.sel-actions button { padding: 4px 6px; font-size: 12px; }
+#sel .wide { grid-column: 3; grid-row: 1; padding: 4px 6px; font-size: 12px; }
+.help { margin-left: auto; align-self: center; flex: none; color: var(--muted); font-size: 12px; display: flex; flex-direction: column; gap: 4px; padding-left: 8px; }
 
 #toasts { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
 .toast { background: rgba(22,27,34,.92); border: 1px solid var(--line); padding: 7px 16px; border-radius: 999px; font-weight: 600;
@@ -139,3 +141,8 @@ kbd { font: 11px ui-monospace, monospace; padding: 1px 5px; border-radius: 4px; 
 .lab-opt span { color: #c3cfdc; }
 .lab-opt select { font: inherit; font-size: 12px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px; }
 #stage canvas.layer { position: absolute; left: 0; top: 0; pointer-events: none; }
+#sel > .row:nth-child(even) { grid-column: 1; }
+#sel > .row:nth-child(odd) { grid-column: 2; }
+
+/* the hints are also on the title screen; drop them when the dock runs out of room */
+@media (max-width: 1720px) { .help { display: none; } }

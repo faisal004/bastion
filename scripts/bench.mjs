@@ -164,7 +164,9 @@ try {
       await evaluate(`(async () => { (await import('/src/opts.js')).opts[${JSON.stringify(key)}] = ${JSON.stringify(c)};
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); })()`);
       const rect = await evaluate(`(() => { const r = document.getElementById('game').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
-      const shot = await send('Page.captureScreenshot', { format: 'png', clip: { ...rect, scale: 1 } });
+      if (args.select) await evaluate(`(() => { const b = window.bastion; const t = b.game.towers.find((x) => x.type === ${JSON.stringify(args.select)}); b.view.selected = t; })()`);
+      if (args.select) await evaluate(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+      const shot = await send('Page.captureScreenshot', args.full ? { format: 'png' } : { format: 'png', clip: { ...rect, scale: 1 } });
       const file = `${args.dir || 'docs'}/${key}-${c}.png`;
       writeFileSync(file, Buffer.from(shot.result.data, 'base64'));
       console.log(`  ${file}`);

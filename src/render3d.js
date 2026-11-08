@@ -137,6 +137,7 @@ export class Renderer3D {
     r.outputColorSpace = THREE.SRGBColorSpace;
     r.toneMapping = THREE.ACESFilmicToneMapping;
     r.toneMappingExposure = 1.0;
+    r.info.autoReset = false; // count draw calls across every composer pass, reset once per frame
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -649,6 +650,7 @@ ${NOISE}`)
     const gameT = game.time + (game.state === 'playing' ? alpha * C.STEP : 0);
     this.uTime.value = this.clock;
     this.particleU.uTime.value = gameT;
+    this.renderer.info.reset();
     const P = this.prof, t0 = performance.now();
     this.placeCamera(cam);
     this.fillEnemies(game, alpha, gameT);
